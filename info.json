@@ -1,0 +1,10 @@
+{
+	"name": "MysticalForestry",
+	"version": "0.0.1",
+	"title": "Mystical Forestry",
+	"author": "Catalyss",
+  	"homepage": "",
+	"factorio_version": "2.0",
+	"description": "Allow you to grow ressources tree. \nInspired by the Minecraft mod Mystical Agriculture.",
+	"dependencies": ["base >= 2.0.0", "space-age >= 2.0", "? quality-plants"]
+}
