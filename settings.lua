@@ -1,14 +1,24 @@
---data:extend({
---  {
---    type = "bool-setting",
---    name = "mystical-agriculture-all-items",
---    setting_type = "startup",
---    default_value = false,
---    order = "zzz",
---    localised_name = { "setting-name.mystical-agriculture-all-items" },
---  }
---})
---unused for now 
+data:extend({
+  {
+    type = "bool-setting",
+    name = "mystical-agriculture-all-items",
+    setting_type = "startup",
+    default_value = false,
+    hidden=true,
+    order = "zzz",
+    localised_name = { "setting-name.mystical-agriculture-all-items" },
+  }
+})
+data:extend({
+  {
+    type = "bool-setting",
+    name = "mystical-agriculture-quality-seeds",
+    setting_type = "startup",
+    default_value = false,
+    order = "zz",
+    localised_name = { "setting-name.mystical-agriculture-quality-seeds" },
+  }
+})
 data:extend({
   {
     type = "bool-setting",
@@ -54,5 +64,16 @@ data:extend({
     minimum_value = 1,
     order = "c",
     localised_name = { "setting-name.mystical-agriculture-crafting-amount" },
+  }
+})
+data:extend({
+  {
+    type = "string-setting",
+    name = "mystical-agriculture-custom-items",
+    setting_type = "startup",
+    default_value = "",
+    allow_blank = true,
+    order = "d",
+    localised_name = { "setting-name.mystical-agriculture-custom-items" },
   }
 })

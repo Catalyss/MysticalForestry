@@ -26,6 +26,42 @@ data:extend(
     {
         {
             type = "item-subgroup",
+            name = "mystical-agriculture-seed-recycling",
+            group = "mystical-agricultures";
+            order = "z",
+            icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
+            icon_size = 64,
+            localised_name = {"item-group-name.mystical-agricultures"},
+        },
+    })
+data:extend(
+    {
+        {
+            type = "item-subgroup",
+            name = "mystical-agriculture-log-recycling",
+            group = "mystical-agricultures";
+            order = "zz",
+            icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
+            icon_size = 64,
+            localised_name = {"item-group-name.mystical-agricultures"},
+        },
+    })
+data:extend(
+    {
+        {
+            type = "item-subgroup",
+            name = "mystical-agriculture-quality-seed-crafting",
+            group = "mystical-agricultures";
+            order = "zzzzzzzzz",
+            icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
+            icon_size = 64,
+            localised_name = {"item-group-name.mystical-agricultures"},
+        },
+    })
+data:extend(
+    {
+        {
+            type = "item-subgroup",
             name = "mystical-agriculture-reprocessing",
             group = "mystical-agricultures";
             order = "c",
@@ -70,3 +106,28 @@ data:extend(
             localised_name = {"item-group-name.mystical-agricultures"},
         },
     })
+data:extend(
+    {
+        {
+            type = "item-subgroup",
+            name = "mystical-agriculture-essence",
+            group = "mystical-agricultures";
+            order = "2a",
+            icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
+            icon_size = 64,
+            localised_name = {"item-group-name.mystical-agricultures"},
+        },
+    })
+data:extend(
+    {
+        {
+            type = "item-subgroup",
+            name = "mystical-agriculture-crystal",
+            group = "mystical-agricultures";
+            order = "3a",
+            icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
+            icon_size = 64,
+            localised_name = {"item-group-name.mystical-agricultures"},
+        },
+    })
+
