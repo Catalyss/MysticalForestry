@@ -1,0 +1,345 @@
+
+local INFUSER_NAME = "mystical-agriculture-essence-infuser"
+local GUI_NAME = "mystical_infuser_gui"
+
+local function is_essence(name)
+    return name:match("^mystical%-agriculture%-.+%-essence$") ~= nil
+end
+
+local function is_crystal(name)
+    return name == "mystical-agriculture-master-gaster-crystal"
+        or name:match("^mystical%-agriculture%-.+%-crystal$") ~= nil
+end
+
+local function essence_quality(name)
+    return name:match("^mystical%-agriculture%-(.+)%-essence$")
+end
+
+local function crystal_quality(name)
+    if name == "mystical-agriculture-master-gaster-crystal" then
+        return nil
+    end
+
+    return name:match("^mystical%-agriculture%-(.+)%-crystal$")
+end
+
+local function crystal_matches(essence, crystal)
+    if crystal == "mystical-agriculture-master-gaster-crystal" then
+        return true
+    end
+
+    local e = essence_quality(essence)
+    local c = crystal_quality(crystal)
+
+    return e ~= nil and c ~= nil and e == c
+end
+
+local creating_gui = false
+
+script.on_event(defines.events.on_gui_opened, function(event)
+    if creating_gui then return end
+    if not event.entity or event.entity.name ~= INFUSER_NAME then return end
+
+    local player = game.players[event.player_index]
+    local entity = event.entity
+
+    if player.gui.screen[GUI_NAME] then
+        player.gui.screen[GUI_NAME].destroy()
+    end
+
+    creating_gui = true
+
+    local frame = player.gui.screen.add {
+        type = "frame",
+        name = GUI_NAME,
+        --caption = entity.localised_name,
+        direction = "vertical",
+        style = "inset_frame_container_frame",
+        top_padding = 4,
+        bottom_padding = 8,
+        left_padding = 8,
+        right_padding = 8,
+        use_header_filler = true,
+    }
+    frame.auto_center = true
+
+    local titlebar = frame.add {
+        type = "flow",
+        name = "titlebar",
+        direction = "horizontal",
+    }
+
+    -- Draggable area
+    local drag_bar = titlebar.add {
+        type = "empty-widget",
+        name = "drag_bar",
+        style = "draggable_space_header",
+        drag_target = frame,
+    }
+
+    drag_bar.style.horizontally_stretchable = true
+    drag_bar.style.height = 24
+
+    -- Title displayed over/alongside the header
+    local title = titlebar.add {
+        type = "label",
+        name = "title",
+        caption = entity.localised_name,
+        style = "frame_title",
+    }
+
+    -- Make the title itself draggable too
+    title.drag_target = frame
+    titlebar.drag_target = frame
+
+    -- Push the close button to the right
+    local title_spacer = titlebar.add {
+        type = "empty-widget",
+        name = "title_spacer",
+    }
+
+    title_spacer.style.horizontally_stretchable = true
+
+    titlebar.add {
+        type = "sprite-button",
+        name = "close_button",
+        sprite = "utility/close",
+        style = "frame_action_button",
+        tooltip = { "gui.close" },
+    }
+
+    local inside_shallow_frame = frame.add {
+        type = "frame",
+        name = "content",
+        style = "inside_shallow_frame",
+        direction = "horizontal",
+    }
+    local Charater = inside_shallow_frame.add {
+        type = "frame",
+        name = "Charater",
+        style = "entity_frame",
+        padding = 12,
+        use_header_filler = false,
+        direction = "horizontal",
+    }
+    local VF = Charater.add {
+        type = "flow",
+        direction = "vertical",
+        name = "VerticalFlow",
+        style = "vertical_flow",
+        vertical_spacing = 4,
+    }
+    local CLabel = VF.add {
+        type = "label",
+        caption = "Character",
+        name = "CLabel",
+        single_line = true,
+    }
+
+    local VFINV = VF.add {
+        type = "flow",
+        direction = "vertical",
+        name = "VFINV",
+        style = "vertical_flow",
+    }
+
+    local scrollPance = VFINV.add {
+        type = "scroll-pane",
+        direction = "vertical",
+        name = "verticalScrollPane",
+        --style = "vertical_scrollbar",
+    }
+
+    local InventoryTable = scrollPance.add {
+        type = "table",
+        column_count=10,
+        direction = "horizontal",
+        name = "InvTable 10 x 32",
+        style = "slot_table",
+        padding = 4,
+        vertical_spacing = 4,
+    }
+
+    --InventoryTable
+    --now I just need to add and create the invetory_slot
+
+    local inventory = player.get_main_inventory()
+
+    if inventory then
+        for i = 1, #inventory do
+            local slot = InventoryTable.add {
+                type = "sprite-button",
+                name = "inventory_slot_" .. i,
+                style = "inventory_slot",
+                width = 40,
+                height = 40,
+                natural_width = 40,
+                natural_height = 40,
+                padding = 0,
+            }
+
+            local stack = inventory[i]
+
+            if stack.valid_for_read then
+                slot.sprite = "item/" .. stack.name
+                slot.number = stack.count
+            end
+        end
+    end
+
+    local Insfuser = inside_shallow_frame.add {
+        type = "frame",
+        name = "Insfuser",
+        style = "entity_frame",
+        padding = 12,
+        use_header_filler = false,
+        direction = "horizontal",
+    }
+
+    --
+    -- for the infuser side the plan is to have 2 boxes in the center
+    -- top slot is the Item to infuse (any item in the game)
+    -- bottom slot is crystal (need to be the same quality as the essence)
+    -- and around them in a circle 8 boxes spread evenly
+    -- those are gonna our infusing input always 4 of them in a cross (so top, bottom, left and right) are gonna require X ammount (amount is decied later for now 10) quality essence (any but need to be the same)
+    -- and the other 4 slot will require the items needed to craft the item in the center (only 4 of them if there is more and we ignore liquids) 
+    -- the middle slot also act as out output solt after craft (is possible otherwise just add 2 slot next to the center one for output)
+    -- so once all ingredients are in the craft start it consume everything
+    -- and output the Item to infuse with the actual factorio quality 
+    -- and return the crystal as a normal crystal unless it is the master cystal
+
+    player.opened = frame
+    creating_gui = false
+end)
+
+local function refresh_inventory_gui(player)
+    local gui = player.gui.screen[GUI_NAME]
+
+    if not gui or not gui.valid then
+        return
+    end
+
+    local inventory = player.get_main_inventory()
+
+    if not inventory then
+        return
+    end
+
+    local inventory_table =
+        gui.content.Charater.VerticalFlow.VFINV.verticalScrollPane.InvTable
+
+    if not inventory_table or not inventory_table.valid then
+        return
+    end
+
+    for i = 1, #inventory do
+
+        local row_index = math.floor((i - 1) / 10)
+
+        local row =
+            inventory_table["inventory_row_" .. row_index]
+
+        if row and row.valid then
+
+            local slot =
+                row["inventory_slot_" .. i]
+
+            if slot and slot.valid then
+
+                local stack = inventory[i]
+
+                if stack.valid_for_read then
+                    if stack.quality then
+                        slot.sprite = "item-with-quality/" .. stack.name .. "/" .. stack.quality.name
+                    else
+                        slot.sprite = "item/" .. stack.name
+                    end
+                    slot.number = stack.count
+                else
+                    slot.sprite = nil
+                    slot.number = nil
+                end
+
+            end
+        end
+    end
+end
+
+
+script.on_event(defines.events.on_gui_click, function(event)
+    local element = event.element
+
+    if not element or not element.valid then
+        return
+    end
+
+    local player = game.players[event.player_index]
+
+    if element.name == "close_button" then
+        if player.gui.screen[GUI_NAME] then
+            player.gui.screen[GUI_NAME].destroy()
+        end
+
+        return
+    end
+
+    local inventory_index =
+        string.match(element.name, "^inventory_slot_(%d+)$")
+
+    if inventory_index then
+        inventory_index = tonumber(inventory_index)
+
+        local inventory = player.get_main_inventory()
+
+        if not inventory then
+            return
+        end
+
+        local slot = inventory[inventory_index]
+
+        if not slot or not slot.valid then
+            return
+        end
+
+        local cursor = player.cursor_stack
+
+        if event.button == defines.mouse_button_type.left then
+
+            -- Empty cursor:
+            -- pick up the entire slot.
+            if not cursor.valid_for_read then
+
+                if slot.valid_for_read then
+                    cursor.swap_stack(slot)
+                end
+
+            -- Cursor has something:
+            -- swap / merge with the inventory slot.
+            else
+
+                if slot.valid_for_read
+                    and slot.name == cursor.name
+                    and slot.quality == cursor.quality then
+
+                    -- Merge cursor into existing stack.
+                    cursor.transfer_stack(slot)
+
+                else
+
+                    -- Swap the two stacks.
+                    cursor.swap_stack(slot)
+                end
+            end
+        end
+        refresh_inventory_gui(player)
+        return
+    end
+end)
+
+script.on_event(defines.events.on_gui_closed, function(event)
+    local player = game.players[event.player_index]
+
+    if player.gui.screen[GUI_NAME] and not creating_gui then
+        player.gui.screen[GUI_NAME].destroy()
+    end
+end)

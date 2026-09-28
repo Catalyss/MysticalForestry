@@ -4,14 +4,14 @@ local seeds = {}
 local infusion_crystal_cache = {}
 local infusion_seed_cache = {}
 local quality_seed_reciped_items = {
-    [0] = { { type = "item", name = "iron-plate", amount = 50 }, { type = "item", name = "copper-plate", amount = 50 } },           -- normal
-    [1] = { { type = "item", name = "steel-plate", amount = 50 }, { type = "item", name = "electronic-circuit", amount = 50 } },    -- uncommon
-    [2] = { { type = "item", name = "engine-unit", amount = 10 }, { type = "item", name = "advanced-circuit", amount = 75 } },      -- rare
+    [0] = { { type = "item", name = "iron-plate", amount = 50 }, { type = "item", name = "copper-plate", amount = 50 } },                                                               -- normal
+    [1] = { { type = "item", name = "steel-plate", amount = 50 }, { type = "item", name = "electronic-circuit", amount = 50 } },                                                        -- uncommon
+    [2] = { { type = "item", name = "engine-unit", amount = 10 }, { type = "item", name = "advanced-circuit", amount = 75 } },                                                          -- rare
     [3] = { { type = "item", name = "holmium-plate", amount = 100 }, { type = "item", name = "tungsten-plate", amount = 100 }, { type = "item", name = "carbon-fiber", amount = 30 } }, -- epic
-    [4] = { { type = "item", name = "wood", amount = 30 } },                                                        -- legendary
-    [5] = { { type = "item", name = "quantum-processor", amount = 30 } }                                                              -- legendary
+    [4] = { { type = "item", name = "wood", amount = 30 } },                                                                                                                            -- legendary
+    [5] = { { type = "item", name = "quantum-processor", amount = 30 } }                                                                                                                -- legendary
 }
-
+local avoid_dupes = {}
 -- Settings
 local techss = settings.startup["mystical-agriculture-technology-amount"].value
 local crafting = settings.startup["mystical-agriculture-crafting-amount"].value
@@ -93,6 +93,17 @@ local tree_08 = { -- tree-08
 }
 
 local letters = { "a", "b", "c", "d", "e", "f", "g", "h", "i", "j" }
+
+local function make_result_key(results)
+    local parts = {}
+
+    for _, r in ipairs(results) do
+        table.insert(parts, r.name)
+    end
+
+    table.sort(parts)
+    return table.concat(parts, "|")
+end
 
 -- Helper functions
 local function make_tree_variation(base_path, variant, tint)
@@ -302,14 +313,14 @@ local function create_log_recycling_recipe(raw_name, counter, minable, recipe_ic
         {
             type = "recipe",
             name = counter .. raw_name .. "-log-recycling",
-            category = "recycling",
+            categories = {"recycling"},
             subgroup = "mystical-agriculture-log-recycling",
             energy_required = 2,
             ingredients = {
                 { type = "item", name = counter .. raw_name .. "-log", amount = 1 }
             },
             results = {
-                { type = "item", name = counter .. raw_name .. "-log", amount = 1, probability = 0.5 }
+                { type = "item", name = counter .. raw_name .. "-log", amount = 1, independent_probability = 0.5 }
             },
             icons = recipe_icon,
             order = "a[log-recycling]-" .. counter,
@@ -326,14 +337,14 @@ local function create_seed_recycling_recipe(raw_name, counter, minable, recipe_i
         {
             type = "recipe",
             name = counter .. raw_name .. "-seed-recycling",
-            category = "recycling",
+            categories = {"recycling"},
             subgroup = "mystical-agriculture-seed-recycling",
             energy_required = 2,
             ingredients = {
                 { type = "item", name = counter .. raw_name .. "-tree-seed", amount = 1 }
             },
             results = {
-                { type = "item", name = counter .. raw_name .. "-tree-seed", amount = 1, probability = 0.5 }
+                { type = "item", name = counter .. raw_name .. "-tree-seed", amount = 1, independent_probability = 0.5 }
             },
             icons = recipe_icon,
             order = "a[seed-recycling]-" .. counter,
@@ -372,16 +383,19 @@ function func.create_quality_crystal(quality, previousQuality)
     table.insert(infusion_crystal_cache,
         { item = crystal, quality = quality, previousQuality = previousQuality or quality })
 
+    table.sort(infusion_crystal_cache, function(a, b)
+        return a.quality.level < b.quality.level
+    end)
     data:extend({ crystal })
 end
 
 function func.create_master_crystal(previousQuality)
     local crystal = {
         type = "item",
-        name = "mystical-agriculture-" .. "master" .. "-crystal",
+        name = "mystical-agriculture-" .. "master-gaster" .. "-crystal",
         icons = get_master_crsytal_icon(),
         subgroup = "mystical-agriculture-crystal",
-        order = "a[crystal]-" .. "master",
+        order = "a[crystal]-" .. "master-gaster",
         stack_size = 1,
         weight = 1000000,
         flags = { "not-stackable" },
@@ -398,7 +412,11 @@ function func.create_master_crystal(previousQuality)
 
     }
     table.insert(infusion_crystal_cache,
-        { item = crystal, quality = { name = "master", level = 999 }, previousQuality = previousQuality })
+        { item = crystal, quality = { name = "master-gaster", level = 999 }, previousQuality = previousQuality })
+
+    table.sort(infusion_crystal_cache, function(a, b)
+        return a.quality.level < b.quality.level
+    end)
     data:extend({ crystal })
 end
 
@@ -456,7 +474,7 @@ function func.create_quality_essence(quality)
         stack_size = 10,
         plant_result = resource_name .. "-tree",
         place_result = resource_name .. "-tree",
-        fuel_category = "chemical",
+        fuel_categories = {"chemical"},
         fuel_value = "100MJ",
         weight = 10000,
         localised_name = { "", func.make_colored_quality_name("Essence tree seed", quality) }
@@ -467,14 +485,14 @@ function func.create_quality_essence(quality)
         {
             type = "recipe",
             name = raw_name .. "-seed-recycling",
-            category = "recycling",
+            categories = {"recycling"},
             subgroup = "mystical-agriculture-seed-recycling",
             energy_required = 2,
             ingredients = {
                 { type = "item", name = raw_name .. "-tree-seed", amount = 1 }
             },
             results = {
-                { type = "item", name = raw_name .. "-tree-seed", amount = 1, probability = 0.5 }
+                { type = "item", name = raw_name .. "-tree-seed", amount = 1, independent_probability = 0.5 }
             },
             icons =
             { {
@@ -500,12 +518,13 @@ function func.create_quality_essence(quality)
                 shift = { 8, -8 },
             }, },
             order = "a[seed-recycling]-" .. raw_name,
-            enabled = false,
+            enabled = (quality.name == "normal"),
             allow_productivity = false,
             allow_quality = false,
             localised_name = { "recipe-name.seed-recycling", func.make_colored_quality_name("Essence tree seed", quality) },
         }
     })
+
 
     local pictures = {}
     for i, variant in ipairs(tree_08) do
@@ -598,6 +617,17 @@ function func.create_craft_category()
             localised_name = { "item-group-name.mystical-agricultures" },
         },
     })
+    data:extend({
+        {
+            type = "item-subgroup",
+            name = "mystical-agriculture-infused-items",
+            group = "mystical-agricultures",
+            order = "zzzzzz000",
+            icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
+            icon_size = 64,
+            localised_name = { "item-group-name.mystical-agricultures" },
+        },
+    })
 
     local quality_list = {}
     for _, q in pairs(data.raw["quality"]) do
@@ -627,7 +657,7 @@ function func.create_craft_category()
     data:extend({
         {
             type = "item-subgroup",
-            name = "mystical-agriculture-essence-up-" .. "master",
+            name = "mystical-agriculture-essence-up-" .. "master-gaster",
             group = "mystical-agricultures",
             order = string.format("zzzzzzz%02d", quality_list and #quality_list + 1 or 0),
             icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
@@ -647,7 +677,7 @@ function func.create_essence_recipe()
     table.insert(recipes, {
         type = "recipe",
         name = "mystical-agriculture-essence-base",
-        category = "crafting",
+        categories = {"crafting"},
         subgroup = "mystical-agriculture-essence-tree-up",
         energy_required = 5,
         main_product = "mystical-agriculture-normal-essence-tree-seed",
@@ -667,7 +697,7 @@ function func.create_essence_recipe()
                 name = "mystical-agriculture-normal-essence-tree-seed",
                 amount_min = 1,
                 amount_max = 4,
-                probability = 0.28
+                independent_probability = 0.28
             },
             {
                 type = "item",
@@ -680,6 +710,10 @@ function func.create_essence_recipe()
         allow_quality = false,
         localised_name = { "recipe-name.quality-seed-crafting", func.get_item_localised_name("mystical-agriculture-normal-essence") }
     })
+
+    table.sort(infusion_crystal_cache, function(a, b)
+        return a.quality.level < b.quality.level
+    end)
 
     for i, value in ipairs(infusion_crystal_cache) do
         if value.previousQuality then
@@ -702,7 +736,7 @@ function func.create_essence_recipe()
                     table.insert(ingredients, { type = "item", name = sname, amount = 1 })
                 else
                     table.insert(ingredients,
-                    { type = "item", name = "mystical-agriculture-" .. previous.name .. "-essence-tree-seed", amount = 1 })
+                        { type = "item", name = "mystical-agriculture-" .. previous.name .. "-essence-tree-seed", amount = 1 })
                 end
                 table.insert(ingredients,
                     { type = "item", name = "mystical-agriculture-" .. current.name .. "-essence", amount = 100 })
@@ -710,7 +744,7 @@ function func.create_essence_recipe()
                     {
                         type = "recipe",
                         name = "mystical-agriculture-" .. sname .. "-crafting",
-                        category = "crafting",
+                        categories = {"crafting"},
                         subgroup = "mystical-agriculture-essence-tree-up",
                         energy_required = 1,
                         order = string.format(
@@ -743,7 +777,7 @@ function func.create_essence_recipe()
                             current.name .. "-using-" ..
                             crystalTier.name,
 
-                        category = "crafting",
+                        categories = {"crafting"},
                         subgroup = "mystical-agriculture-essence-up-" .. current.name,
                         energy_required = 5,
                         order = recipe_order,
@@ -789,12 +823,10 @@ function func.create_essence_recipe()
                 table.insert(recipes, {
                     type = "recipe",
                     name = "mystical-agriculture-crystal-infuse-" .. current.name .. "-to-" .. value.quality.next,
-                    category = "crafting",
+                    categories = {"crafting"},
                     subgroup = "mystical-agriculture-crystal-up",
                     energy_required = 5,
                     main_product = "mystical-agriculture-" .. value.quality.next .. "-crystal",
-                    reset_freshness_on_craft = true,
-                    result_is_always_fresh = true,
                     order = string.format(
                         "b[upgrade]-%02d",
                         current.level -- original essence tier
@@ -815,7 +847,9 @@ function func.create_essence_recipe()
                         {
                             type = "item",
                             name = "mystical-agriculture-" .. value.quality.next .. "-crystal",
-                            amount = 1
+                            amount = 1,
+                            reset_freshness_on_craft = true,
+                            always_fresh = true 
                         }
                     },
                     enabled = false,
@@ -830,7 +864,7 @@ function func.create_essence_recipe()
 
     -- get highest tier crystal
     local highest_crystal = infusion_crystal_cache[#infusion_crystal_cache - 1].quality
-    local master_crystal_name = "mystical-agriculture-master-crystal"
+    local master_crystal_name = "mystical-agriculture-master-gaster-crystal"
 
     -- gather all essence ingredients
     local essence_ingredients = {}
@@ -855,8 +889,8 @@ function func.create_essence_recipe()
     data:extend({
         {
             type = "recipe",
-            name = "mystical-agriculture-master-crystal",
-            category = "crafting",
+            name = "mystical-agriculture-master-gaster-crystal",
+            categories = {"crafting"},
             subgroup = "mystical-agriculture-crystal-up",
             energy_required = 10,
             ingredients = essence_ingredients,
@@ -878,8 +912,6 @@ function func.create_essence_recipe()
     data:extend(recipes)
 end
 
--- Main processing loop - optimized to iterate only once
-
 function func.initialize_prototypes()
     for resource_name, resource_proto in pairs(data.raw.resource) do
         local minable = resource_proto.minable
@@ -892,9 +924,20 @@ function func.initialize_prototypes()
                 resource_name
             local icon_name = resource_name:gsub("-ore$", "")
             local tint = get_resource_tint(resource_name, resource_proto)
-            local tranlatedkey = get_translated_key(minable, raw_name)
+            local tranlatedkey = get_translated_key(minable, resource_name)
             local results = get_mine_results(minable)
             local has_fluid = has_fluid_result(results)
+
+            --store the ressource minable output to check later if we didn't already added a seed that produces the same outputs
+            avoid_dupes = avoid_dupes or {}
+
+            local key = make_result_key(results)
+
+            if not avoid_dupes[key] then
+                avoid_dupes[key] = true
+            else
+                goto skip
+            end
 
 
             -- ITEMS CREATION
@@ -916,7 +959,7 @@ function func.initialize_prototypes()
                 stack_size = 10,
                 plant_result = counter .. resource_name .. "-tree",
                 place_result = counter .. resource_name .. "-tree",
-                fuel_category = "chemical",
+                fuel_categories = {"chemical"},
                 fuel_value = "100MJ",
                 weight = 10000,
                 localised_name = { "item-name.mystical-tree-seed", tranlatedkey }
@@ -1127,7 +1170,7 @@ function func.initialize_prototypes()
                     {
                         type = "recipe",
                         name = counter .. raw_name .. "-from-log",
-                        category = has_fluid and "crafting-with-fluid" or "crafting",
+                        categories = { has_fluid and "crafting-with-fluid" or "crafting" },
                         subgroup = "mystical-agriculture-processing",
                         energy_required = 2,
                         ingredients = get_mine_results_as_log(minable, 2, resource_name, counter),
@@ -1153,7 +1196,7 @@ function func.initialize_prototypes()
                     {
                         type = "recipe",
                         name = counter .. raw_name .. "-tree-seed-crafting",
-                        category = has_fluid and "crafting-with-fluid" or "crafting",
+                        categories = { has_fluid and "crafting-with-fluid" or "crafting" },
                         subgroup = "mystical-agriculture-infusion",
                         energy_required = 2,
                         ingredients = seed_crafting_ingredients,
@@ -1176,7 +1219,7 @@ function func.initialize_prototypes()
                     {
                         type = "recipe",
                         name = counter .. raw_name .. "-tree-seed-from-log",
-                        category = "crafting",
+                        categories = {"crafting"},
                         subgroup = "mystical-agriculture-reprocessing",
                         energy_required = 1,
                         ingredients = get_mine_results_as_log(minable, 1, resource_name, counter),
@@ -1202,7 +1245,7 @@ function func.initialize_prototypes()
             table.insert(logrc, { type = "unlock-recipe", recipe = counter .. raw_name .. "-seed-recycling" })
             local tech = {
                 type = "technology",
-                name = "mystical-" .. raw_name,
+                name = counter .. "mystical-" .. raw_name,
                 icons = { {
                     icon = "__MysticalForestry__/graphics/template-tree-seed.png",
                     icon_size = 64,
@@ -1231,6 +1274,7 @@ function func.initialize_prototypes()
 
             data:extend({ tech })
         end
+        ::skip::
     end
 end
 
@@ -1310,6 +1354,18 @@ function func.create_custom_prototypes(item_proto, has_tech, use_custom_icon, en
         local has_fluid = has_fluid_result(results)
 
 
+        --store the ressource minable output to check later if we didn't already added a seed that produces the same outputs
+        avoid_dupes = avoid_dupes or {}
+
+        local key = make_result_key(results)
+
+        if not avoid_dupes[key] then
+            avoid_dupes[key] = true
+        else
+            goto skip
+        end
+
+
         local recipe_icon = get_recipe_icon(minable, has_fluid)
         if item_proto.icon then
             recipe_icon = item_proto.icon
@@ -1342,7 +1398,7 @@ function func.create_custom_prototypes(item_proto, has_tech, use_custom_icon, en
             stack_size = 10,
             plant_result = counter .. resource_name .. "-tree",
             place_result = counter .. resource_name .. "-tree",
-            fuel_category = "chemical",
+            fuel_categories = {"chemical"},
             fuel_value = "100MJ",
             weight = 10000,
             localised_name = { "item-name.mystical-tree-seed", tranlatedkey }
@@ -1563,7 +1619,7 @@ function func.create_custom_prototypes(item_proto, has_tech, use_custom_icon, en
                 {
                     type = "recipe",
                     name = counter .. raw_name .. "-from-log",
-                    category = has_fluid and "crafting-with-fluid" or "crafting",
+                    categories = { has_fluid and "crafting-with-fluid" or "crafting" },
                     subgroup = "mystical-agriculture-processing",
                     energy_required = 2,
                     ingredients = get_mine_results_as_log(minable, 2, resource_name, counter),
@@ -1599,7 +1655,7 @@ function func.create_custom_prototypes(item_proto, has_tech, use_custom_icon, en
                 {
                     type = "recipe",
                     name = counter .. raw_name .. "-tree-seed-crafting",
-                    category = has_fluid and "crafting-with-fluid" or "crafting",
+                    categories = { has_fluid and "crafting-with-fluid" or "crafting" },
                     subgroup = "mystical-agriculture-infusion",
                     energy_required = 2,
                     ingredients = seed_crafting_ingredients,
@@ -1626,7 +1682,7 @@ function func.create_custom_prototypes(item_proto, has_tech, use_custom_icon, en
                 {
                     type = "recipe",
                     name = counter .. raw_name .. "-tree-seed-from-log",
-                    category = "crafting",
+                    categories = {"crafting"},
                     subgroup = "mystical-agriculture-reprocessing",
                     energy_required = 1,
                     ingredients = get_mine_results_as_log(minable, 1, resource_name, counter),
@@ -1693,6 +1749,7 @@ function func.create_custom_prototypes(item_proto, has_tech, use_custom_icon, en
 
         if has_tech then data:extend({ tech }) end
     end
+    ::skip::
 end
 
 function func.place_icon_on_item(itemPrototype, qualityPrototype)
@@ -1758,76 +1815,84 @@ function func.create_intermediate_seed(name, quality)
 end
 
 function func.create_quality_seed_recipe()
-    local quality_list = {}
-    for _, q in pairs(data.raw["quality"]) do
-        if q.name ~= "quality-unknown" then
-            table.insert(quality_list, q)
-        end
-    end
 
-    table.sort(quality_list, function(a, b)
-        return a.level < b.level
+    table.sort(infusion_seed_cache, function(a, b)
+        return a.quality.level < b.quality.level
     end)
 
     for _, s in pairs(seeds) do
         local cc = 0
         local previousQuality
-        for _, q in ipairs(quality_list) do
-            if q.name == "normal" or q.name == "quality-unknown" then goto continue end
-            local sseed_name = func.create_intermediate_seed(s, q)
-            local seed_name = sseed_name.name
-            -- add to upgrade seed's quality
-            -- first check if the quality level is lower than normal if so just use normal's item and if it is higher than legendary then just use legendary's item
-            local ingredients
-            if data.raw["quality"]["normal"].level >= q.level then
-                ingredients = table.deepcopy(quality_seed_reciped_items["normal"])
-            elseif data.raw["quality"]["legendary"].level <= q.level then
-                ingredients = table.deepcopy(quality_seed_reciped_items["legendary"])
+        local previousCrycrystal
+        local previoustech = nil
+
+        for i, crystal in ipairs(infusion_crystal_cache) do
+            if not previousCrycrystal then
+                previousCrycrystal = crystal
             else
-                ingredients = table.deepcopy(quality_seed_reciped_items[q.name])
+                if crystal.previousQuality.name == previousCrycrystal.quality.name and previousCrycrystal.quality.next == crystal.quality.name then
+                    q = crystal.quality
+                    previousQuality = crystal.previousQuality
+
+                    if q.name == "normal" or q.name == "quality-unknown" then
+                    else
+                        local sseed_name = func.create_intermediate_seed(s, q)
+                        local seed_name = sseed_name.name
+                        -- add to upgrade seed's quality
+                        -- first check if the quality level is lower than normal if so just use normal's item and if it is higher than legendary then just use legendary's item
+                        local ingredients
+                        if data.raw["quality"]["normal"].level >= q.level then
+                            ingredients = table.deepcopy(quality_seed_reciped_items[0]) or {}
+                        elseif data.raw["quality"]["legendary"].level <= q.level then
+                            ingredients = table.deepcopy(quality_seed_reciped_items[5]) or {}
+                        else
+                            ingredients = table.deepcopy(quality_seed_reciped_items[q.level]) or {}
+                        end
+                        if not previousQuality then
+                            table.insert(ingredients, { type = "item", name = s.name, amount = 1 })
+                        else
+                            table.insert(ingredients, { type = "item", name = s.name, amount = 1 }) -- would put the previous quality seed as ingredient but you can't add quality to normal recipe because I'm stupid
+                        end
+                        table.insert(ingredients,
+                            { type = "item", name = "mystical-agriculture-" .. q.name .. "-essence", amount = 100 })
+                        data:extend({
+                            {
+                                type = "recipe",
+                                name = "mystical-agriculture-" .. seed_name .. "-crafting",
+                                categories = {"crafting"},
+                                subgroup = "mystical-agriculture-quality-seed-crafting",
+                                energy_required = 1,
+                                order = cc .. "a[crafting]-" .. s.name,
+                                ingredients = ingredients,
+                                main_product = seed_name,
+                                results = { { type = "item", name = seed_name, amount = 1 } },
+                                enabled = false,
+                                hidden = false,
+                                localised_name = { "recipe-name.quality-seed-crafting", func.get_item_localised_name(seed_name) },
+                            }
+                        })
+                        local tech = {
+                            type = "technology",
+                            name = "mystical-trigger-" .. sseed_name.name,
+                            icons = sseed_name.icons,
+                            effects = { { type = "unlock-recipe", recipe = "mystical-agriculture-" .. seed_name .. "-crafting" },
+                                        {type = "unlock-recipe",recipe = "mystical-agriculture-" .. q.name .. "-essence-seed-recycling"}},
+                            prerequisites = { "mystical-trigger-mystical-agriculture-" .. q.name .. "-essence-tree-seed", "mystical-trigger-mystical-agriculture-" .. q.name .. "-crystal" },
+                            localised_name = { "technology-name.mystical-ressource-seed-tech", func.get_item_localised_name(sseed_name.name) },
+                            order = "zzzzz[quality-seed-tech]-" .. "mystical-trigger-" .. sseed_name.name
+                        }
+                        tech.research_trigger = {
+                            type = "craft-item",
+                            item = { name = "mystical-agriculture-" .. q.name .. "-essence" },
+                            count = 1
+                        }
+                        data:extend({ tech })
+                        --mystical-trigger-mystical-agriculture-uncommon-essence-tree-seed
+                        cc = cc + 1
+                    end
+                    previousCrycrystal = crystal
+                end
             end
-            if not previousQuality then
-                table.insert(ingredients, { type = "item", name = s.name, amount = 1 })
-            else
-                table.insert(ingredients, { type = "item", name = s.name, amount = 1 }) -- would put the previous quality seed as ingredient but you can't add quality to normal recipe because I'm stupid
-            end
-            table.insert(ingredients,
-                { type = "item", name = "mystical-agriculture-" .. q.name .. "-essence", amount = 100 })
-            data:extend({
-                {
-                    type = "recipe",
-                    name = "mystical-agriculture-" .. seed_name .. "-crafting",
-                    category = "crafting",
-                    subgroup = "mystical-agriculture-quality-seed-crafting",
-                    energy_required = 1,
-                    order = cc .. "a[crafting]-" .. s.name,
-                    ingredients = ingredients,
-                    main_product = seed_name,
-                    results = { { type = "item", name = seed_name, amount = 1 } },
-                    enabled = false,
-                    hidden = false,
-                    localised_name = { "recipe-name.quality-seed-crafting", func.get_item_localised_name(seed_name) },
-                }
-            })
-            local tech = {
-                type = "technology",
-                name = "mystical-trigger-" .. sseed_name.name,
-                icons = sseed_name.icons,
-                effects = { { type = "unlock-recipe", recipe = "mystical-agriculture-" .. seed_name .. "-crafting" } },
-                prerequisites = { "mystical-trigger-mystical-agriculture-" .. q.name .. "-essence-tree-seed", "mystical-trigger-mystical-agriculture-" .. q.name .. "-crystal" },
-                localised_name = { "technology-name.mystical-ressource-seed-tech", func.get_item_localised_name(sseed_name.name) },
-                order = "zzzzz[quality-seed-tech]-" .. "mystical-trigger-" .. sseed_name.name
-            }
-            tech.research_trigger = {
-                type = "craft-item",
-                item = { name = "mystical-agriculture-" .. q.name .. "-essence" },
-                count = 1
-            }
-            data:extend({ tech })
-            --mystical-trigger-mystical-agriculture-uncommon-essence-tree-seed
-            cc = cc + 1
-            previousQuality = q
-            ::continue::
         end
     end
 end
@@ -1835,14 +1900,15 @@ end
 function func.trigger_tech_p2()
     local previousseed = nil
     local previoustech = nil
+    table.sort(infusion_seed_cache, function(a, b)
+        return a.quality.level < b.quality.level
+    end)
     for i, seed in ipairs(infusion_seed_cache) do
         if previousseed ~= nil then
-            local eff
-            if seed.quality.next == nil then
-                eff = nil
-            else
-                eff = { { type = "unlock-recipe", recipe = "mystical-agriculture-" .. seed.item.name .. "-crafting" } }
-            end
+            local eff = {
+                { type = "unlock-recipe", recipe = "mystical-agriculture-" .. seed.item.name .. "-crafting" },
+                { type = "unlock-recipe", recipe = "mystical-agriculture-" .. seed.quality.name .. "-essence-seed-recycling" }
+            }
             local tech = {
                 type = "technology",
                 name = "mystical-trigger-" .. seed.item.name,
@@ -1864,65 +1930,161 @@ function func.trigger_tech_p2()
     end
 end
 
+
 function func.generate_trigger_techs()
-    local previousCrycrystal
+    local previousseed = nil
     local previoustech = nil
-    for i, crystal in ipairs(infusion_crystal_cache) do
-        if crystal.quality.level ~= crystal.previousQuality.level then
+    table.sort(infusion_crystal_cache, function(a, b)
+        return a.quality.level < b.quality.level
+    end)
+    for i, seed in ipairs(infusion_crystal_cache) do
+        if previousseed ~= nil then
             local eff
-            if previousCrycrystal.quality.next == nil then
-                eff = { { type = "unlock-recipe", recipe = "mystical-agriculture-master-crystal" } }
+            if seed.quality.name == "master-gaster" then
+                eff = { { type = "unlock-recipe", recipe = "mystical-agriculture-master-gaster-crystal" } }
             else
-                eff = { { type = "unlock-recipe", recipe = "mystical-agriculture-crystal-infuse-" .. previousCrycrystal.quality.name .. "-to-" .. crystal.quality.name } }
-                table.insert(eff,
-                    {
-                        type = "unlock-recipe",
-                        recipe = "mystical-agriculture-essence-upgrade-" ..
-                            previousCrycrystal.quality.name ..
-                            "-to-" .. crystal.quality.name .. "-using-" .. crystal.quality.name
-                    })
+                eff = { { type = "unlock-recipe", recipe = "mystical-agriculture-crystal-infuse-" .. previousseed.quality.name .. "-to-" .. seed.quality.name } }
+                for j = i, #infusion_crystal_cache do
+                    local crystalTier = infusion_crystal_cache[j].quality
+                    if not data.raw["recipe"]["mystical-agriculture-essence-upgrade-" .. previousseed.quality.name .. "-to-" .. seed.quality.name .. "-using-" .. crystalTier.name] then
+                        error("you might be using an unsupported quality mods and the added quality does not match wiht the expected level please tell me which mod is it so i can either make it incompatible or make a patch")
+                    end
+                    if seed.quality.level ~= previousseed.quality.level and data.raw.item["mystical-agriculture-" .. seed.quality.name .. "-essence"] then
+                        table.insert(eff, {
+                            type = "unlock-recipe",
+                            recipe =
+                                "mystical-agriculture-essence-upgrade-" ..
+                                previousseed.quality.name .. "-to-" ..
+                                seed.quality.name .. "-using-" ..
+                                crystalTier.name
+                        })
+                    end
+                end
             end
             local tech = {
                 type = "technology",
-                name = "mystical-trigger-" .. crystal.item.name,
-                icons = crystal.item.icons,
+                name = "mystical-trigger-" .. seed.item.name,
+                icons = seed.item.icons,
                 effects = eff,
                 prerequisites = previoustech and { previoustech.name } or nil,
-                localised_name = { "technology-name.mystical-crystal-tech", func.get_item_localised_name(crystal.item.name) },
-                order = "zzzzz[quality-seed-tech]-" .. "mystical-trigger-" .. crystal.item.name
+                localised_name = { "technology-name.mystical-crystal-tech", func.get_item_localised_name(seed.item.name) },
+                order = "zzzzz[quality-crystal-tech]-" .. "mystical-trigger-" .. seed.item.name
             }
             tech.research_trigger = {
                 type = "craft-item",
-                item = { name = previousCrycrystal.item.name },
+                item = { name = previousseed.item.name },
                 count = 1
             }
-
             data:extend({ tech })
             previoustech = tech
         end
-        previousCrycrystal = crystal
+        previousseed = seed
     end
 end
 
 function func.add_achievement()
     data:extend({
         {
-            name = "craft-master-crystal",
+            name = "craft-master-gaster-crystal",
             icon = "__MysticalForestry__/graphics/where_is_my_gauntlet.png",
             icon_size = 127,
 
-            order = "g[progress]-z[master-crystal]",
+            order = "g[progress]-z[master-gaster-crystal]",
 
             type = "achievement",
             achievement_type = "craft-item",
-            item_product = "mystical-agriculture-" .. "master" .. "-crystal",
+            item_product = "mystical-agriculture-" .. "master-gaster" .. "-crystal",
             amount = 1,
             allowed_without_fight = false,
-            localised_name = {"","Where is my gauntlet ?"},
-            localised_description = {"","I love shiny rocks too"}
+            localised_name = { "", "Where is my gauntlet ?" },
+            localised_description = { "", "I love shiny rocks too" }
         }
     })
 end
+
+local INFUSER_NAME = "mystical-agriculture-essence-infuser"
+
+local base_chest = data.raw["container"]["steel-chest"]
+
+local infuser_container = {
+    type = "container",
+    name = INFUSER_NAME,
+    icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
+    icon_size = 64,
+    flags = {
+        "placeable-player",
+        "player-creation",
+        "not-rotatable"
+    },
+    minable = {
+        mining_time = 0.5,
+        result = INFUSER_NAME
+    },
+    max_health = 300,
+    corpse = "small-remnants",
+    inventory_size = 10,
+    collision_box = {
+        { -0.7, -0.7 },
+        { 0.7, 0.7 }
+    },
+    selection_box = {
+        { -0.8, -0.8 },
+        { 0.8, 0.8 }
+    },
+    open_sound = {
+        filename = "__base__/sound/machine-open.ogg",
+        volume = 0.6
+    },
+    close_sound = {
+        filename = "__base__/sound/machine-close.ogg",
+        volume = 0.6
+    },
+    impact_category = "metal",
+}
+
+if base_chest and base_chest.circuit_connector then
+    infuser_container.circuit_wire_max_distance = base_chest.circuit_wire_max_distance
+    infuser_container.circuit_connector = base_chest.circuit_connector
+else
+    log("[MysticalForestry] steel-chest has no circuit_connector on this Factorio version — Essence Infuser will not support wires until this is addressed.")
+end
+
+data:extend({
+    {
+        type = "item",
+        name = INFUSER_NAME,
+        icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
+        icon_size = 64,
+        subgroup = "mystical-agriculture-machines",
+        order = "zz[essence-infuser]",
+        place_result = INFUSER_NAME,
+        stack_size = 10,
+    },
+    {
+        type = "recipe",
+        name = INFUSER_NAME,
+        enabled = true,
+        ingredients = {
+            { type = "item", name = "steel-plate", amount = 20 },
+            { type = "item", name = "iron-gear-wheel", amount = 10 },
+            { type = "item", name = "stone-brick", amount = 20 },
+        },
+        results = {
+            { type = "item", name = INFUSER_NAME, amount = 1 }
+        },
+    },
+    infuser_container
+})
+
+data:extend({
+    {
+        type = "sprite",
+        name = "mystical-forestry-placeholder-any",
+        filename = "__MysticalForestry__/graphics/template-categoryIcon.png",
+        width = 64,
+        height = 64,
+    }
+})
 
 
 return func
