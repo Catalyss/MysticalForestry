@@ -2009,8 +2009,9 @@ local base_chest = data.raw["container"]["steel-chest"]
 local infuser_container = {
     type = "container",
     name = INFUSER_NAME,
-    icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
-    icon_size = 64,
+    icon = "__MysticalForestry__/graphics/Mystical-Infuser.png",
+    icon_size = 1000,
+    icon_mipmaps = 4,
     flags = {
         "placeable-player",
         "player-creation",
@@ -2022,14 +2023,35 @@ local infuser_container = {
     },
     max_health = 300,
     corpse = "small-remnants",
-    inventory_size = 10,
+    inventory_size = 50000,
     collision_box = {
-        { -0.7, -0.7 },
-        { 0.7, 0.7 }
+        { -1.4, -1.4 },
+        { 1.4, 1.4 }
     },
     selection_box = {
-        { -0.8, -0.8 },
-        { 0.8, 0.8 }
+        { -1.6, -1.6 },
+        { 1.6, 1.6 }
+    },
+    picture = {
+        layers = {
+            {
+                filename = "__MysticalForestry__/graphics/Mystical-Infuser.png",
+                priority = "high",
+                width = 1000,
+                height = 1000,
+                shift = { 0, .5 },
+                scale = 0.3
+            },
+            {
+                filename = "__MysticalForestry__/graphics/Mystical-Infuser-shadow.png",
+                priority = "high",
+                width = 1000,
+                height = 1000,
+                shift = { 0, .5 },
+                draw_as_shadow = true,
+                scale = 0.3
+            }
+        }
     },
     open_sound = {
         filename = "__base__/sound/machine-open.ogg",
@@ -2053,12 +2075,13 @@ data:extend({
     {
         type = "item",
         name = INFUSER_NAME,
-        icon = "__MysticalForestry__/graphics/template-categoryIcon.png",
-        icon_size = 64,
+        icon = "__MysticalForestry__/graphics/Mystical-Infuser.png",
+        icon_size = 1000,
+        icon_mipmaps = 4,
         subgroup = "mystical-agriculture-machines",
         order = "zz[essence-infuser]",
         place_result = INFUSER_NAME,
-        stack_size = 10,
+        stack_size = 50,
     },
     {
         type = "recipe",

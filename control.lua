@@ -40,7 +40,6 @@ script.on_event(defines.events.on_script_trigger_effect, function(event)
                 entity.get_transport_line(2).insert_at_back(new_item)
             end
         else
-            -- Fallback
             entity.insert(new_item)
         end
         return
@@ -85,7 +84,6 @@ script.on_event(defines.events.on_script_trigger_effect, function(event)
                 entity.get_transport_line(2).insert_at_back(new_item)
             end
         else
-            -- Fallback
             entity.insert(new_item)
         end
         return
@@ -102,21 +100,15 @@ local INFUSER_SIGNAL_TRIGGER = { type = "virtual", name = "signal-S" }
 local INFUSER_SIGNAL_READY = { type = "virtual", name = "signal-R" }
 local INFUSER_SIGNAL_ENTITY = "mystical-agriculture-infuser-signal-combinator"
 
-local SLOT_INDEX = {
-    item           = 1,
-    crystal        = 2,
-    essence_top    = 3,
-    essence_left   = 4,
-    essence_right  = 5,
-    essence_bottom = 6,
-    ing_tl         = 7,
-    ing_tr         = 8,
-    ing_bl         = 9,
-    ing_br         = 10,
-}
+local RESERVED_CRYSTAL_INDEX = 1
 
-local ESSENCE_SLOTS = { SLOT_INDEX.essence_top, SLOT_INDEX.essence_left, SLOT_INDEX.essence_right, SLOT_INDEX.essence_bottom }
-local ING_SLOTS = { SLOT_INDEX.ing_tl, SLOT_INDEX.ing_tr, SLOT_INDEX.ing_bl, SLOT_INDEX.ing_br }
+local POOLED_ROLES = {
+    "item",
+    "essence_top", "essence_left", "essence_right", "essence_bottom",
+    "ing_tl", "ing_tr", "ing_bl", "ing_br",
+}
+local ESSENCE_ROLES = { "essence_top", "essence_left", "essence_right", "essence_bottom" }
+local ING_ROLES = { "ing_tl", "ing_tr", "ing_bl", "ing_br" }
 
 local INFUSER_SLOT_SIZE = 64
 local INFUSER_CENTER_SLOT_SIZE = 60
@@ -129,8 +121,6 @@ local INFUSER_INVENTORY_SIZE = 420
 local INFUSER_CANVAS_OFFSET_X = 500
 local INFUSER_CANVAS_OFFSET_Y = 60
 
--- N/E/S/W = essence (the "cross"), diagonals = ingredients.
--- 0deg = straight up, going clockwise.
 local CIRCLE_RING = {
     { key = "essence_top",    angle = 0   },
     { key = "ing_tr",         angle = 45  },
@@ -184,7 +174,15 @@ script.on_init(function()
     storage.infusers = {}
     storage.infuser_last_signal = {}
     storage.infuser_combinators = {}
+    storage.infuser_selected_rule = {}
+    -- [unit_number] = { [role] = { name = item_name, count = N } }
+    storage.infuser_slot_types = {}
 end)
+
+local function get_assignments(unit_number)
+    storage.infuser_slot_types[unit_number] = storage.infuser_slot_types[unit_number] or {}
+    return storage.infuser_slot_types[unit_number]
+end
 
 local function link_combinator_to_red(entity, combinator)
     local ok, err = pcall(function()
@@ -216,6 +214,8 @@ end
 local function unregister_infuser(unit_number)
     if storage.infusers then storage.infusers[unit_number] = nil end
     if storage.infuser_last_signal then storage.infuser_last_signal[unit_number] = nil end
+    if storage.infuser_selected_rule then storage.infuser_selected_rule[unit_number] = nil end
+    if storage.infuser_slot_types then storage.infuser_slot_types[unit_number] = nil end
     if storage.infuser_combinators then
         local combinator = storage.infuser_combinators[unit_number]
         if combinator and combinator.valid then combinator.destroy() end
@@ -251,14 +251,88 @@ script.on_event({
     defines.events.script_raised_destroy,
 }, on_entity_removed)
 
--- ============================================================
--- RECIPE / CRAFT LOGIC
--- ============================================================
+
+local function insert_pooled(entity, role, item_name, count)
+    local inv = entity.get_inventory(defines.inventory.chest)
+    local assignments = get_assignments(entity.unit_number)
+    local remaining = count
+    local proto = prototypes.item[item_name]
+    local max_stack = proto and proto.stack_size or count
+
+    -- merge into existing matching stacks first
+    for i = 2, #inv do -- index 1 reserved for crystal
+        if remaining <= 0 then break end
+        local s = inv[i]
+        if s.valid_for_read and s.name == item_name then
+            local space = max_stack - s.count
+            if space > 0 then
+                local add = math.min(space, remaining)
+                s.count = s.count + add
+                remaining = remaining - add
+            end
+        end
+    end
+    -- then fill empty slots
+    for i = 2, #inv do
+        if remaining <= 0 then break end
+        local s = inv[i]
+        if not s.valid_for_read then
+            local add = math.min(max_stack, remaining)
+            s.set_stack({ name = item_name, count = add })
+            remaining = remaining - add
+        end
+    end
+
+    local inserted = count - remaining
+    if inserted > 0 then
+        local entry = assignments[role]
+        if not entry then
+            entry = { name = item_name, count = 0 }
+            assignments[role] = entry
+        end
+        entry.count = entry.count + inserted
+    end
+    return inserted
+end
+
+local function withdraw_pooled(entity, role)
+    local assignments = get_assignments(entity.unit_number)
+    local entry = assignments[role]
+    if not entry then return nil, 0 end
+
+    local proto = prototypes.item[entry.name]
+    local max_stack = proto and proto.stack_size or 1
+    local take = math.min(max_stack, entry.count)
+    if take <= 0 then return nil, 0 end
+
+    local inv = entity.get_inventory(defines.inventory.chest)
+    inv.remove({ name = entry.name, count = take })
+    entry.count = entry.count - take
+    local name = entry.name
+    if entry.count <= 0 then assignments[role] = nil end
+    return name, take
+end
+
+local function consume_pooled(entity, role, amount)
+    if amount <= 0 then return end
+    local assignments = get_assignments(entity.unit_number)
+    local entry = assignments[role]
+    if not entry then return end
+    local inv = entity.get_inventory(defines.inventory.chest)
+    local actual = math.min(amount, entry.count)
+    if actual <= 0 then return end
+    inv.remove({ name = entry.name, count = actual })
+    entry.count = entry.count - actual
+    if entry.count <= 0 then assignments[role] = nil end
+end
+
 local find_recipe_for_item
 local get_solid_ingredients
 local check_ready
+local check_ready_quality_upgrade
 local attempt_craft
 local validate_infuser_inventory
+local gather_slot_snapshot
 
 local function recipe_is_recycling(recipe)
     if recipe.categories then
@@ -267,6 +341,28 @@ local function recipe_is_recycling(recipe)
         end
     end
     return false
+end
+
+-- the fix for the essence-sharing bug.
+gather_slot_snapshot = function(entity)
+    local inv = entity.get_inventory(defines.inventory.chest)
+    local assignments = get_assignments(entity.unit_number)
+    local snapshot = {}
+
+    local crystal_stack = inv[RESERVED_CRYSTAL_INDEX]
+    snapshot.crystal = crystal_stack.valid_for_read and { name = crystal_stack.name, count = crystal_stack.count } or nil
+
+    for _, role in ipairs(POOLED_ROLES) do
+        local entry = assignments[role]
+        if entry and entry.count > 0 then
+            snapshot[role] = { name = entry.name, count = entry.count }
+        else
+            assignments[role] = nil
+            snapshot[role] = nil
+        end
+    end
+
+    return snapshot
 end
 
 find_recipe_for_item = function(force, item_name)
@@ -305,38 +401,34 @@ get_solid_ingredients = function(recipe)
 end
 
 local function resolve_ingredients(force, item_name)
-    local custom = infusion_api.get_custom_ingredients(item_name)
-    if custom then return custom end
-
     local recipe = find_recipe_for_item(force, item_name)
     if recipe then return get_solid_ingredients(recipe) end
-
     return nil
 end
 
-check_ready = function(entity)
+-- quality-upgrade fallback, now batched
+check_ready_quality_upgrade = function(entity)
     local inv = entity.get_inventory(defines.inventory.chest)
-    if not inv then return false, "no-inventory" end
+    local snapshot = gather_slot_snapshot(entity)
 
-    local item_stack = inv[SLOT_INDEX.item]
-    if not item_stack.valid_for_read then return false, "no-item" end
-    if item_stack.count ~= 1 then return false, "must-supply-exactly-one-item" end
+    local item_entry = snapshot.item
+    if not item_entry then return false, "no-item" end
+    local batch = item_entry.count
+    if batch < 1 then return false, "no-item" end
 
-    local recipe = find_recipe_for_item(entity.force, item_stack.name)
-    if not recipe then return false, "no-recipe" end
-
-    local ingredients = resolve_ingredients(entity.force, item_stack.name)
+    local ingredients = resolve_ingredients(entity.force, item_entry.name)
     if not ingredients then return false, "no-recipe" end
     if #ingredients > 4 then return false, "too-many-ingredients" end
 
-    local used = {}
+    local used_roles = {}
     for _, req in ipairs(ingredients) do
+        local needed = req.amount * batch
         local found = false
-        for _, idx in ipairs(ING_SLOTS) do
-            if not used[idx] then
-                local s = inv[idx]
-                if s.valid_for_read and s.name == req.name and s.count >= req.amount then
-                    used[idx] = true
+        for _, role in ipairs(ING_ROLES) do
+            if not used_roles[role] then
+                local entry = snapshot[role]
+                if entry and entry.name == req.name and entry.count >= needed then
+                    used_roles[role] = true
                     found = true
                     break
                 end
@@ -346,41 +438,88 @@ check_ready = function(entity)
     end
 
     local essence_quality_name = nil
-    for _, idx in ipairs(ESSENCE_SLOTS) do
-        local s = inv[idx]
-        if not s.valid_for_read or not is_essence(s.name) then return false, "missing-essence" end
-        local q = essence_quality(s.name)
+    for _, role in ipairs(ESSENCE_ROLES) do
+        local entry = snapshot[role]
+        if not entry or not is_essence(entry.name) then return false, "missing-essence" end
+        local q = essence_quality(entry.name)
         if essence_quality_name == nil then
             essence_quality_name = q
         elseif essence_quality_name ~= q then
             return false, "mismatched-essence"
         end
-        if s.count < INFUSER_ESSENCE_PER_SLOT then return false, "not-enough-essence" end
+        if entry.count < INFUSER_ESSENCE_PER_SLOT * batch then return false, "not-enough-essence" end
     end
 
-    local crystal_stack = inv[SLOT_INDEX.crystal]
-    if not crystal_stack.valid_for_read or not is_crystal(crystal_stack.name) then
+    local crystal_entry = snapshot.crystal
+    if not crystal_entry or not is_crystal(crystal_entry.name) then
         return false, "missing-crystal"
     end
-    if not crystal_matches("mystical-agriculture-" .. essence_quality_name .. "-essence", crystal_stack.name) then
+    if not crystal_matches("mystical-agriculture-" .. essence_quality_name .. "-essence", crystal_entry.name) then
         return false, "crystal-mismatch"
     end
 
     local target_quality = prototypes.quality[essence_quality_name]
     if not target_quality then return false, "unknown-quality:" .. tostring(essence_quality_name) end
 
-    local current_quality = item_stack.quality
-    if current_quality and current_quality.level >= target_quality.level then
+    -- Best-effort check: since the item role is pooled by NAME only
+    local sample_quality = nil
+    for i = 2, #inv do
+        local s = inv[i]
+        if s.valid_for_read and s.name == item_entry.name then
+            sample_quality = s.quality
+            break
+        end
+    end
+    if sample_quality and sample_quality.level >= target_quality.level then
         return false, "item-already-at-or-above-target-quality"
     end
 
     return true, {
-        recipe = recipe,
         ingredients = ingredients,
-        used_ing_slots = used,
+        batch = batch,
         essence_quality_name = essence_quality_name,
         target_quality = target_quality,
     }
+end
+
+--  dispatcher 
+check_ready = function(entity)
+    local inv = entity.get_inventory(defines.inventory.chest)
+    if not inv then return false, "no-inventory" end
+
+    local snapshot = gather_slot_snapshot(entity)
+    local rule_id, rule_or_candidates = infusion_api.find_rule(snapshot)
+
+    local function finalize_rule(id, rule)
+        local totals = infusion_api.aggregate_requirements(rule, POOLED_ROLES, snapshot)
+        for name, needed in pairs(totals) do
+            local have = 0
+            local assignments = get_assignments(entity.unit_number)
+            for _, role in ipairs(POOLED_ROLES) do
+                local entry = assignments[role]
+                if entry and entry.name == name then have = have + entry.count end
+            end
+            if have < needed then return false, "insufficient-pooled:" .. name end
+        end
+        return true, { kind = "rule", rule_id = id, rule = rule }
+    end
+
+    if rule_id then
+        return finalize_rule(rule_id, rule_or_candidates)
+    elseif rule_or_candidates then
+        local chosen = storage.infuser_selected_rule[entity.unit_number]
+        for _, id in ipairs(rule_or_candidates) do
+            if id == chosen then
+                return finalize_rule(id, infusion_api.get_rule(id))
+            end
+        end
+        return false, "ambiguous-recipe:" .. table.concat(rule_or_candidates, ",")
+    end
+
+    local ok, info = check_ready_quality_upgrade(entity)
+    if not ok then return false, info end
+    info.kind = "quality_upgrade"
+    return true, info
 end
 
 attempt_craft = function(entity, player)
@@ -396,92 +535,122 @@ attempt_craft = function(entity, player)
     end
 
     local inv = entity.get_inventory(defines.inventory.chest)
-    local base_name = inv[SLOT_INDEX.item].name
+    local assignments = get_assignments(entity.unit_number)
 
-    inv[SLOT_INDEX.item].clear()
+    if info.kind == "quality_upgrade" then
+        local batch = info.batch
+        local item_entry = assignments.item
+        local item_name = item_entry.name
 
-    for _, req in ipairs(info.ingredients) do
-        for idx in pairs(info.used_ing_slots) do
-            local s = inv[idx]
-            if s.valid_for_read and s.name == req.name then
-                if s.count > req.amount then
-                    s.count = s.count - req.amount
-                else
-                    s.clear()
+        for _, req in ipairs(info.ingredients) do
+            for _, role in ipairs(ING_ROLES) do
+                local entry = assignments[role]
+                if entry and entry.name == req.name then
+                    consume_pooled(entity, role, req.amount * batch)
+                    break
                 end
-                info.used_ing_slots[idx] = nil
-                break
+            end
+        end
+
+        for _, role in ipairs(ESSENCE_ROLES) do
+            consume_pooled(entity, role, INFUSER_ESSENCE_PER_SLOT * batch)
+        end
+
+        local crystal_stack = inv[RESERVED_CRYSTAL_INDEX]
+        if crystal_stack.name ~= "mystical-agriculture-master-gaster-crystal" then
+            crystal_stack.set_stack { name = "mystical-agriculture-normal-crystal", count = 1, quality = "normal" }
+        end
+
+        -- transform the whole batch in place to the target quality
+        inv.remove({ name = item_name, count = batch })
+        inv.insert({ name = item_name, count = batch, quality = info.target_quality.name })
+
+        return true
+    end
+
+    -- info.kind == "rule"
+    local rule = info.rule
+
+    do
+        local pattern, require_empty = infusion_api.effective_field(rule, "item")
+        local amount = infusion_api.required_amount(pattern)
+        if not require_empty and amount > 0 then
+            consume_pooled(entity, "item", amount)
+        end
+    end
+
+    do
+        local pattern, require_empty = infusion_api.effective_field(rule, "crystal")
+        local amount = infusion_api.required_amount(pattern)
+        if not require_empty and amount > 0 then
+            local s = inv[RESERVED_CRYSTAL_INDEX]
+            if s.count > amount then s.count = s.count - amount else s.clear() end
+        end
+    end
+
+    local totals = infusion_api.aggregate_requirements(rule, POOLED_ROLES, gather_slot_snapshot(entity))
+    for name, amount in pairs(totals) do
+        local remaining = amount
+        for _, role in ipairs(POOLED_ROLES) do
+            if remaining <= 0 then break end
+            local entry = assignments[role]
+            if entry and entry.name == name then
+                local take = math.min(entry.count, remaining)
+                consume_pooled(entity, role, take)
+                remaining = remaining - take
             end
         end
     end
 
-    for _, idx in ipairs(ESSENCE_SLOTS) do
-        local s = inv[idx]
-        if s.count > INFUSER_ESSENCE_PER_SLOT then
-            s.count = s.count - INFUSER_ESSENCE_PER_SLOT
-        else
-            s.clear()
+    if rule.craft_use_essence ~= false and rule.essence_top == nil then
+        for _, role in ipairs(ESSENCE_ROLES) do
+            consume_pooled(entity, role, INFUSER_ESSENCE_PER_SLOT)
         end
     end
 
-    local crystal_stack = inv[SLOT_INDEX.crystal]
-    if crystal_stack.name ~= "mystical-agriculture-master-gaster-crystal" then
-        crystal_stack.set_stack { name = "mystical-agriculture-normal-crystal", count = 1, quality = "normal" }
+    local return_item = infusion_api.get_return_item(rule)
+    local rolled_item = infusion_api.roll(return_item, "return_item")
+    if rolled_item then
+        local quality_name = nil
+        if rule.return_quality then
+            local snapshot = gather_slot_snapshot(entity)
+            local essence_entry = snapshot.essence_top
+            if essence_entry then
+                quality_name = essence_entry.name:match("^mystical%-agriculture%-(.+)%-essence$")
+            end
+        end
+        if quality_name then
+            inv.insert({ name = rolled_item.name, count = rolled_item.amount, quality = quality_name })
+        else
+            inv.insert({ name = rolled_item.name, count = rolled_item.amount })
+        end
+        local entry = assignments.item
+        if not entry then entry = { name = rolled_item.name, count = 0 }; assignments.item = entry end
+        if entry.name == rolled_item.name then
+            entry.count = entry.count + rolled_item.amount
+        else
+            entry.name = rolled_item.name
+            entry.count = rolled_item.amount
+        end
     end
 
-    inv[SLOT_INDEX.item].set_stack {
-        name = base_name,
-        count = 1,
-        quality = info.target_quality.name,
-    }
+    local return_crystal = infusion_api.get_return_crystal(rule)
+    local rolled_crystal = infusion_api.roll(return_crystal, "return_crystal")
+    if rolled_crystal then
+        inv[RESERVED_CRYSTAL_INDEX].set_stack({ name = rolled_crystal.name, count = rolled_crystal.amount, quality = "normal" })
+    elseif rule.return_consumed_crystal and rule.craft_use_crystal ~= false then
+        local crystal_stack = inv[RESERVED_CRYSTAL_INDEX]
+        if crystal_stack.valid_for_read and crystal_stack.name ~= "mystical-agriculture-master-gaster-crystal" then
+            crystal_stack.set_stack { name = "mystical-agriculture-normal-crystal", count = 1, quality = "normal" }
+        end
+    end
 
+    storage.infuser_selected_rule[entity.unit_number] = nil
     return true
 end
 
-local function eject_stack(entity, stack)
-    if not stack.valid_for_read then return end
-    entity.surface.spill_item_stack {
-        position = entity.position,
-        stack = stack,
-        enable_looted = false,
-        force_to_surface = true,
-    }
-    stack.clear()
-end
-
-validate_infuser_inventory = function(entity)
-    local inv = entity.get_inventory(defines.inventory.chest)
-    if not inv then return end
-
-    local crystal_stack = inv[SLOT_INDEX.crystal]
-    if crystal_stack.valid_for_read and not is_crystal(crystal_stack.name) then
-        eject_stack(entity, crystal_stack)
-    end
-
-    for _, idx in ipairs(ESSENCE_SLOTS) do
-        local s = inv[idx]
-        if s.valid_for_read and not is_essence(s.name) then
-            eject_stack(entity, s)
-        end
-    end
-
-    local item_stack = inv[SLOT_INDEX.item]
-    if item_stack.valid_for_read then
-        local ingredients = resolve_ingredients(entity.force, item_stack.name)
-        if ingredients then
-            local allowed = {}
-            for _, ing in ipairs(ingredients) do
-                allowed[ing.name] = true
-            end
-            for _, idx in ipairs(ING_SLOTS) do
-                local s = inv[idx]
-                if s.valid_for_read and not allowed[s.name] then
-                    eject_stack(entity, s)
-                end
-            end
-        end
-    end
-end
+-- Overflow (unassigned physical items) is stuffed
+validate_infuser_inventory = function(entity) end
 
 script.on_nth_tick(INFUSER_CHECK_INTERVAL, function()
     if not storage.infusers then return end
@@ -533,13 +702,12 @@ script.on_nth_tick(6, function()
 end)
 
 local creating_gui = false
-local open_infusers = {}        -- [player_index] = entity
-local infuser_slot_buttons = {} -- [player_index] = { [key] = LuaGuiElement }
+local open_infusers = {}
+local infuser_slot_buttons = {}
 
 local function bring_infuser_slots_to_front(player)
     local slot_buttons = infuser_slot_buttons[player.index]
     if not slot_buttons then return end
-
     for _, button in pairs(slot_buttons) do
         if button.valid then
             local ok, err = pcall(function() button.bring_to_front() end)
@@ -560,40 +728,62 @@ script.on_event(defines.events.on_tick, function()
     end
 end)
 
-local function slot_accepts(slot_key, item_name)
-    if slot_key == "crystal" then
-        return is_crystal(item_name)
-    elseif slot_key:match("^essence_") then
-        return is_essence(item_name)
+-- Narrows acceptance to the currently-still-possible custom rules,
+-- then falls back to the built-in quality-upgrade behavior
+
+local function role_accepts(entity, role, item_name)
+    if role == "crystal" then return is_crystal(item_name) end
+
+    local snapshot = gather_slot_snapshot(entity)
+    local candidates = infusion_api.candidate_rules(snapshot)
+
+    for _, c in ipairs(candidates) do
+        local pattern, require_empty = infusion_api.effective_field(c.rule, role)
+        if not require_empty and pattern ~= nil then
+            local ok
+            if type(pattern) == "table" then
+                ok = (pattern.name == item_name)
+            elseif item_name == pattern then
+                ok = true
+            else
+                local success, matched = pcall(string.match, item_name, pattern)
+                ok = success and matched ~= nil
+            end
+            if ok then return true end
+        end
     end
-    return true
+
+    if role:match("^essence_") then return is_essence(item_name) end
+    if role == "item" then return true end
+    if role:match("^ing_") then
+        local item_entry = get_assignments(entity.unit_number).item
+        if item_entry then
+            local real_ings = resolve_ingredients(entity.force, item_entry.name)
+            if real_ings then
+                for _, ing in ipairs(real_ings) do
+                    if ing.name == item_name then return true end
+                end
+            end
+        end
+    end
+    return false
 end
 
-local function placeholder_for_slot(slot_key)
-    if slot_key == "crystal" then
-        return INFUSER_PLACEHOLDER_CRYSTAL
-    elseif slot_key and slot_key:match("^essence_") then
-        return INFUSER_PLACEHOLDER_ESSENCE
-    end
+local function placeholder_for_role(role)
+    if role == "crystal" then return INFUSER_PLACEHOLDER_CRYSTAL end
+    if role:match("^essence_") then return INFUSER_PLACEHOLDER_ESSENCE end
     return INFUSER_PLACEHOLDER_ANY
 end
 
-local function placeholder_tooltip_for_slot(slot_key)
-    if slot_key == "crystal" then
-        return "Place a quality crystal here"
-    elseif slot_key == "item" then
-        return "Place the item to infuse here"
-    elseif slot_key and slot_key:match("^essence_") then
-        return "Place essence here (all four must match)"
-    elseif slot_key and slot_key:match("^ing_") then
-        return "Place a matching recipe ingredient here"
-    end
-    return nil
+local function placeholder_tooltip_for_role(role)
+    if role == "item" then return "Place the item to infuse here (any quantity)" end
+    if role == "crystal" then return "Place a quality crystal here" end
+    if role:match("^essence_") then return "Assign an essence type here" end
+    return "Assign an ingredient type here"
 end
 
-local function set_slot_sprite(button, stack, slot_key)
+local function set_stack_sprite(button, stack)
     if not button or not button.valid then return end
-
     if stack and stack.valid_for_read then
         button.sprite = "item/" .. stack.name
         button.number = stack.count
@@ -603,15 +793,32 @@ local function set_slot_sprite(button, stack, slot_key)
             button.tooltip = stack.prototype.localised_name
         end
     else
+        button.sprite = placeholder_for_role("crystal")
         button.number = nil
-        if slot_key then
-            button.sprite = placeholder_for_slot(slot_key)
-            button.tooltip = placeholder_tooltip_for_slot(slot_key)
-        else
-            button.sprite = nil
-            button.tooltip = nil
-        end
+        button.tooltip = placeholder_tooltip_for_role("crystal")
     end
+end
+
+local function set_pooled_sprite(button, role, name, count)
+    if not button or not button.valid then return end
+    if name then
+        button.sprite = "item/" .. name
+        button.number = count
+        local proto = prototypes.item[name]
+        button.tooltip = proto and proto.localised_name or name
+    else
+        button.sprite = placeholder_for_role(role)
+        button.number = nil
+        button.tooltip = placeholder_tooltip_for_role(role)
+    end
+end
+
+local function set_hint_sprite(button, name, amount)
+    if not button or not button.valid then return end
+    button.sprite = "item/" .. name
+    button.number = amount * -1
+    local proto = prototypes.item[name]
+    button.tooltip = { "", "Needs: ", proto and proto.localised_name or name, " x", amount }
 end
 
 local function compute_infuser_slot_positions(frame_location)
@@ -666,8 +873,10 @@ end
 
 local function create_infuser_floating_slots(player)
     local slot_buttons = {}
+    local all_keys = { "crystal" }
+    for _, r in ipairs(POOLED_ROLES) do table.insert(all_keys, r) end
 
-    for key in pairs(SLOT_INDEX) do
+    for _, key in ipairs(all_keys) do
         local size = slot_size_for_key(key)
         local button = player.gui.screen.add {
             type = "sprite-button",
@@ -709,59 +918,120 @@ local function refresh_inventory_gui(player)
     for i = 1, #inventory do
         local slot = inventory_table["inventory_slot_" .. i]
         if slot and slot.valid then
-            set_slot_sprite(slot, inventory[i])
+            local s = inventory[i]
+            if s.valid_for_read then
+                slot.sprite = "item/" .. s.name
+                slot.number = s.count
+            else
+                slot.sprite = nil
+                slot.number = nil
+            end
         end
     end
     reposition_infuser_slots(player)
 end
 
-local function get_ingredient_hints(entity, inv)
-    local item_stack = inv[SLOT_INDEX.item]
-    if not item_stack.valid_for_read then return nil end
+local function refresh_overflow_panel(player, entity)
+    local gui = player.gui.screen[GUI_NAME]
+    if not gui or not gui.valid then return end
+    local overflow_table = gui.content.Insfuser.overflow_scroll.overflow_table
+    if not overflow_table or not overflow_table.valid then return end
+    overflow_table.clear()
 
-    local recipe = find_recipe_for_item(entity.force, item_stack.name)
-    if not recipe then return nil end
+    local inv = entity.get_inventory(defines.inventory.chest)
+    local assignments = get_assignments(entity.unit_number)
+    local assigned_names = {}
+    for _, entry in pairs(assignments) do assigned_names[entry.name] = true end
 
-    local ingredients = resolve_ingredients(entity.force, item_stack.name)
-    if not ingredients then return nil end
+    local crystal_name = inv[RESERVED_CRYSTAL_INDEX].valid_for_read and inv[RESERVED_CRYSTAL_INDEX].name or nil
 
-    local unmet = {}
-    local used = {}
-    for _, req in ipairs(ingredients) do
-        local satisfied = false
-        for _, idx in ipairs(ING_SLOTS) do
-            if not used[idx] then
-                local s = inv[idx]
-                if s.valid_for_read and s.name == req.name then
-                    used[idx] = true
-                    satisfied = true
-                    break
+    local seen = {}
+    for i = 2, #inv do
+        local s = inv[i]
+        if s.valid_for_read and s.name ~= crystal_name and not assigned_names[s.name] and not seen[s.name] then
+            seen[s.name] = true
+            overflow_table.add {
+                type = "sprite-button",
+                name = "overflow_slot_" .. s.name,
+                style = "inventory_slot",
+                sprite = "item/" .. s.name,
+                number = inv.get_item_count(s.name),
+                width = 40, height = 40,
+            }
+        end
+    end
+end
+
+local function refresh_recipe_select_button(player, entity)
+    local gui = player.gui.screen[GUI_NAME]
+    if not gui or not gui.valid then return end
+    local button = gui.content.Insfuser.craft_row.infuser_select_recipe_button
+    if not button or not button.valid then return end
+
+    local snapshot = gather_slot_snapshot(entity)
+    local rule_id, rule_or_candidates = infusion_api.find_rule(snapshot)
+
+    if rule_id then
+        button.enabled = false
+        button.caption = "Recipe"
+        button.tooltip = "Recipe is unambiguous"
+    elseif rule_or_candidates then
+        button.enabled = true
+        local chosen = storage.infuser_selected_rule[entity.unit_number]
+        local idx_of_chosen = 0
+        for i, id in ipairs(rule_or_candidates) do
+            if id == chosen then idx_of_chosen = i break end
+        end
+        button.caption = "Recipe (" .. idx_of_chosen .. "/" .. #rule_or_candidates .. ")"
+        button.tooltip = "Multiple recipes match — click to cycle through them"
+    else
+        button.enabled = false
+        button.caption = "Recipe"
+        button.tooltip = "No matching custom recipe"
+    end
+end
+
+local function compute_hints(entity, snapshot)
+    local hints = {}
+    local candidates = infusion_api.candidate_rules(snapshot)
+
+    if #candidates == 1 then
+        for _, u in ipairs(infusion_api.unmet_requirements(candidates[1].rule, snapshot)) do
+            hints[u.key] = { name = u.name, amount = u.amount }
+        end
+    elseif #candidates == 0 then
+        local item_entry = snapshot.item
+        if item_entry then
+            local real_ings = resolve_ingredients(entity.force, item_entry.name)
+            if real_ings then
+                local used = {}
+                for _, req in ipairs(real_ings) do
+                    local satisfied = false
+                    for _, role in ipairs(ING_ROLES) do
+                        if not used[role] then
+                            local e = snapshot[role]
+                            if e and e.name == req.name then
+                                used[role] = true
+                                satisfied = true
+                                break
+                            end
+                        end
+                    end
+                    if not satisfied then
+                        for _, role in ipairs(ING_ROLES) do
+                            if not used[role] and not snapshot[role] and not hints[role] then
+                                hints[role] = { name = req.name, amount = req.amount }
+                                used[role] = true
+                                break
+                            end
+                        end
+                    end
                 end
             end
         end
-        if not satisfied then
-            table.insert(unmet, req)
-        end
     end
 
-    local hints = {}
-    local n = 1
-    for _, idx in ipairs(ING_SLOTS) do
-        if not inv[idx].valid_for_read and unmet[n] then
-            hints[idx] = unmet[n]
-            n = n + 1
-        end
-    end
     return hints
-end
-
-local function set_ingredient_hint(button, req)
-    if not button or not button.valid then return end
-    button.number = nil
-    button.sprite = "item/" .. req.name
-    button.number = req.amount*-1
-    local proto = prototypes.item[req.name]
-    button.tooltip = { "", "Needs: ", proto and proto.localised_name or req.name, " x", req.amount }
 end
 
 local function refresh_infuser_gui(player)
@@ -774,18 +1044,26 @@ local function refresh_infuser_gui(player)
     local slot_buttons = infuser_slot_buttons[player.index]
     if not slot_buttons then return end
 
-    local hints = get_ingredient_hints(entity, inv)
+    set_stack_sprite(slot_buttons.crystal, inv[RESERVED_CRYSTAL_INDEX])
 
-    for key, idx in pairs(SLOT_INDEX) do
-        local button = slot_buttons[key]
-        local hint = hints and hints[idx]
-        if hint and not inv[idx].valid_for_read then
-            set_ingredient_hint(button, hint)
+    local snapshot = gather_slot_snapshot(entity)
+    local hints = compute_hints(entity, snapshot)
+    local assignments = get_assignments(entity.unit_number)
+
+    for _, role in ipairs(POOLED_ROLES) do
+        local button = slot_buttons[role]
+        local entry = assignments[role]
+        if entry then
+            set_pooled_sprite(button, role, entry.name, entry.count)
+        elseif hints[role] then
+            set_hint_sprite(button, hints[role].name, hints[role].amount)
         else
-            set_slot_sprite(button, inv[idx], key)
+            set_pooled_sprite(button, role, nil, nil)
         end
     end
 
+    refresh_recipe_select_button(player, entity)
+    refresh_overflow_panel(player, entity)
     bring_infuser_slots_to_front(player)
 end
 
@@ -849,7 +1127,6 @@ local function build_infuser_gui(event)
         direction = "horizontal",
     }
 
-    -- Character inventory panel
     local Charater = inside_shallow_frame.add {
         type = "frame",
         name = "Charater",
@@ -887,7 +1164,11 @@ local function build_infuser_gui(event)
                 natural_height = 40,
                 padding = 0,
             }
-            set_slot_sprite(slot, inventory[i])
+            local s = inventory[i]
+            if s.valid_for_read then
+                slot.sprite = "item/" .. s.name
+                slot.number = s.count
+            end
         end
     end
 
@@ -907,9 +1188,26 @@ local function build_infuser_gui(event)
     local craft_row = Insfuser.add { type = "flow", name = "craft_row", direction = "horizontal" }
     craft_row.style.width = INFUSER_CANVAS_SIZE
     craft_row.style.height = INFUSER_BUTTON_ROW_HEIGHT
+
     local craft_button = craft_row.add { type = "button", name = "infuser_craft_button", caption = "Craft" }
     craft_button.style.height = INFUSER_BUTTON_ROW_HEIGHT
     craft_button.style.padding = 0
+
+    local select_recipe_button = craft_row.add { type = "button", name = "infuser_select_recipe_button", caption = "Recipe" }
+    select_recipe_button.style.height = INFUSER_BUTTON_ROW_HEIGHT
+    select_recipe_button.style.padding = 0
+    select_recipe_button.enabled = false
+
+    Insfuser.add { type = "label", caption = "Overflow", name = "overflow_label" }
+    local overflow_scroll = Insfuser.add { type = "scroll-pane", name = "overflow_scroll", direction = "vertical" }
+    overflow_scroll.style.width = INFUSER_CANVAS_SIZE
+    overflow_scroll.style.height = 120
+    overflow_scroll.add {
+        type = "table",
+        name = "overflow_table",
+        column_count = 8,
+        style = "slot_table",
+    }
 
     open_infusers[player.index] = entity
     player.opened = frame
@@ -959,57 +1257,102 @@ script.on_event(defines.events.on_gui_click, function(event)
     if element.name == "infuser_craft_button" then
         local entity = open_infusers[player.index]
         if entity and entity.valid then
-            attempt_craft(entity, player)
+            local success = attempt_craft(entity, player)
+            if success then
+                player.create_local_flying_text { text = "Infusion complete!", create_at_cursor = true }
+            end
             refresh_infuser_gui(player)
         end
         refresh_inventory_gui(player)
         return
     end
 
-    local infuser_key = string.match(element.name, "^infuser_slot_(.+)$")
-if infuser_key then
-    player.print("[DEBUG] slot click registered: " .. infuser_key) -- TEMP
-
-    local entity = open_infusers[player.index]
-    if not entity or not entity.valid then
-        player.print("[DEBUG] no valid entity") -- TEMP
-        refresh_inventory_gui(player)
+    if element.name == "infuser_select_recipe_button" then
+        local entity = open_infusers[player.index]
+        if entity and entity.valid then
+            local snapshot = gather_slot_snapshot(entity)
+            local rule_id, candidates = infusion_api.find_rule(snapshot)
+            if not rule_id and candidates then
+                local chosen = storage.infuser_selected_rule[entity.unit_number]
+                local next_index = 1
+                for i, id in ipairs(candidates) do
+                    if id == chosen then next_index = i + 1 break end
+                end
+                if next_index > #candidates then next_index = 1 end
+                storage.infuser_selected_rule[entity.unit_number] = candidates[next_index]
+            end
+            refresh_infuser_gui(player)
+        end
         return
     end
 
-    local inv = entity.get_inventory(defines.inventory.chest)
-    if not inv then
-        player.print("[DEBUG] get_inventory(chest) returned nil") -- TEMP
-        refresh_inventory_gui(player)
-        return
-    end
-
-    local idx = SLOT_INDEX[infuser_key]
-    if not idx then
-        player.print("[DEBUG] no SLOT_INDEX entry for " .. infuser_key) -- TEMP
-        refresh_inventory_gui(player)
-        return
-    end
-
-    player.print("[DEBUG] cursor has item: " .. tostring(player.cursor_stack.valid_for_read)) -- TEMP
-
-    local slot = inv[idx]
-    local cursor = player.cursor_stack
-
-        if event.button == defines.mouse_button_type.left then
+    local overflow_name = string.match(element.name, "^overflow_slot_(.+)$")
+    if overflow_name then
+        local entity = open_infusers[player.index]
+        if entity and entity.valid then
+            local inv = entity.get_inventory(defines.inventory.chest)
+            local cursor = player.cursor_stack
             if not cursor.valid_for_read then
-                if slot.valid_for_read then
+                local proto = prototypes.item[overflow_name]
+                local size = proto and proto.stack_size or 1
+                local have = inv.get_item_count(overflow_name)
+                local take = math.min(size, have)
+                if take > 0 then
+                    inv.remove({ name = overflow_name, count = take })
+                    cursor.set_stack({ name = overflow_name, count = take })
+                end
+            end
+            refresh_infuser_gui(player)
+            refresh_inventory_gui(player)
+        end
+        return
+    end
+
+    local infuser_key = string.match(element.name, "^infuser_slot_(.+)$")
+    if infuser_key then
+        local entity = open_infusers[player.index]
+        if not entity or not entity.valid then refresh_inventory_gui(player) return end
+
+        local inv = entity.get_inventory(defines.inventory.chest)
+        if not inv then refresh_inventory_gui(player) return end
+
+        local cursor = player.cursor_stack
+
+        if infuser_key == "crystal" then
+            local slot = inv[RESERVED_CRYSTAL_INDEX]
+            if event.button == defines.mouse_button_type.left then
+                if not cursor.valid_for_read then
+                    if slot.valid_for_read then cursor.swap_stack(slot) end
+                elseif not is_crystal(cursor.name) then
+                    player.create_local_flying_text { text = "That doesn't go there.", create_at_cursor = true }
+                elseif slot.valid_for_read and slot.name == cursor.name and slot.quality == cursor.quality then
+                    cursor.transfer_stack(slot)
+                else
                     cursor.swap_stack(slot)
                 end
-            elseif not slot_accepts(infuser_key, cursor.name) then
-                player.create_local_flying_text {
-                    text = "That doesn't go there.",
-                    create_at_cursor = true,
-                }
-            elseif slot.valid_for_read and slot.name == cursor.name and slot.quality == cursor.quality then
-                cursor.transfer_stack(slot)
-            else
-                cursor.swap_stack(slot)
+            end
+        else
+            local assignments = get_assignments(entity.unit_number)
+            local assigned = assignments[infuser_key]
+
+            if event.button == defines.mouse_button_type.left then
+                if not cursor.valid_for_read then
+                    local name, take = withdraw_pooled(entity, infuser_key)
+                    if name and take > 0 then
+                        cursor.set_stack({ name = name, count = take })
+                    end
+                else
+                    if assigned and assigned.name ~= cursor.name then
+                        player.create_local_flying_text { text = "That doesn't go there.", create_at_cursor = true }
+                    elseif not assigned and not role_accepts(entity, infuser_key, cursor.name) then
+                        player.create_local_flying_text { text = "That doesn't go there.", create_at_cursor = true }
+                    else
+                        local inserted = insert_pooled(entity, infuser_key, cursor.name, cursor.count)
+                        if inserted > 0 then
+                            if inserted >= cursor.count then cursor.clear() else cursor.count = cursor.count - inserted end
+                        end
+                    end
+                end
             end
         end
 
@@ -1048,7 +1391,7 @@ if infuser_key then
 end)
 
 script.on_event(defines.events.on_gui_closed, function(event)
-    if creating_gui then return end 
+    if creating_gui then return end
 
     local player = game.players[event.player_index]
     if player.gui.screen[GUI_NAME] then
