@@ -435,6 +435,58 @@ function api.list_rules()
     return out
 end
 
+local function readable_name(name)
+    local inner = name:match("^%^(.*)%$$")
+    if inner then
+        local plain = (inner:gsub("%%(.)", "%1"))
+        if prototypes.item[plain] then return plain end
+    end
+    return name
+end
+
+local function describe_field(rule, key)
+    local pattern, require_empty = effective_field(rule, key)
+    if require_empty then return key .. "=EMPTY" end
+    if type(pattern) ~= "table" then return nil end -- unconstrained slot
+    return string.format("%s=%s x%d", key, readable_name(pattern.name), pattern.amount or 1)
+end
+
+local function describe_result(spec)
+    local result = normalise_result(spec)
+    if not result then return "-" end
+    local parts = {}
+    for _, o in ipairs(result.options) do
+        local text = resolve_item_name(o.name) or (o.name .. " (unresolved)")
+        text = text .. (o.min == o.max and (" x" .. o.min) or (" x" .. o.min .. "-" .. o.max))
+        if result.weighted then text = text .. " @" .. o.weight .. "%" end
+        table.insert(parts, text)
+    end
+    return table.concat(parts, "; ")
+end
+
+function api.log_rules()
+    local ids = {}
+    each_rule(function(id) table.insert(ids, id) end)
+    table.sort(ids, function(a, b)
+        local pa, na = a:match("^(%a+):(%d+)$")
+        local pb, nb = b:match("^(%a+):(%d+)$")
+        if pa ~= pb then return pa < pb end
+        return tonumber(na) < tonumber(nb)
+    end)
+
+    log(string.format("[MysticalForestry] infusion rules: %d active", #ids))
+    for _, id in ipairs(ids) do
+        local rule = api.get_rule(id)
+        local inputs = {}
+        for _, key in ipairs(ALL_SLOT_KEYS) do
+            local d = describe_field(rule, key)
+            if d then table.insert(inputs, d) end
+        end
+        log(string.format("[MysticalForestry]   %s: %s => item: %s | crystal: %s",
+            id, table.concat(inputs, ", "), describe_result(rule.return_item), describe_result(rule.return_crystal)))
+    end
+end
+
 remote.add_interface(INTERFACE_NAME, {
     add_rule              = api.add_rule,
     remove_rule           = api.remove_rule,

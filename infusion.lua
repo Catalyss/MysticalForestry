@@ -1,4 +1,3 @@
--- infusion.lua
 -- Custom infuser rules. Every field is checked against the matching
 -- infuser slot: nil requires the slot to be EMPTY, a string is matched
 -- as an exact item name first, then as a Lua pattern (escape hyphens
@@ -14,6 +13,8 @@
 --   "a,50%,5-10;b,50%,1-20"                -- weighted pick, each option its own amount range
 -- A table form is also accepted:
 --   { { name = "a", weight = 20 }, { name = "b", weight = 80, min = 1, max = 5 } }
+
+--this is mostly and example recipe
 
 return {
     {
