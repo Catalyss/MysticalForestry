@@ -17,6 +17,14 @@ local func = {}
            5f. Quality seeds & trigger technologies
            5g. Achievement
       6. Static content (Essence Infuser, placeholder sprite)
+
+    NAMING
+      Generated prototypes are named  mystical-<origin>-<item>-<suffix>
+        e.g. mystical-base-iron-ore-tree-seed, mystical-space-age-tungsten-ore-tree-seed
+      <origin> is the mod the item/resource comes from (read from its icon path).
+      Nothing in a name depends on how many other mods are loaded or on iteration order,
+      so adding/removing unrelated mods never renames anything.
+      though I can't quite properly migrate old to the new names unfortunatly.
 ]]
 
 -- Okay so I'm keeping this for the forseeable future because I going to be lost and have to rewrite this file again in 7 months again.. again...
@@ -29,10 +37,15 @@ local MISSING_ICON = GFX .. "missing.png"
 local ESSENCE_ICON = GFX .. "tempalte_kwality_essence.png"
 local ESSENCE_PREFIX = "mystical-agriculture-"
 
+-- Root of every generated seed-set name. The origin mod is appended: "mystical-base-"
+local NAME_ROOT = "mystical-"
+-- Prefix of the seed set currently being built (used by log_ingredient)
+local current_prefix = NAME_ROOT
+
 local techss   = settings.startup["mystical-agriculture-technology-amount"].value
 local crafting = settings.startup["mystical-agriculture-crafting-amount"].value
 
-local counter = 0                  -- prefix that makes every generated prototype name unique
+local counter = 0                  -- only used for logging now, NEVER for names
 local seeds = {}                   -- every ore/custom seed item created (used for quality seeds)
 local avoid_dupes = {}             -- output-signature -> true, prevents duplicate seeds
 local infusion_crystal_cache = {}  -- { item, quality, previousQuality }
@@ -116,6 +129,26 @@ local function item_label(item_name)
     return item_name
 end
 
+local function safe_tech_name(name)
+    if name:match("%-%d+$") then return name .. "-tech" end
+    return name
+end
+
+-- Label for an item prototype. Items without an explicit localised_name fall back
+-- from item-name to the placed entity/equipment name, then to the raw name.
+local function proto_label(proto)
+    if proto.localised_name then return proto.localised_name end
+    local label = { "?", { "item-name." .. proto.name } }
+    if proto.place_result then
+        table.insert(label, { "entity-name." .. proto.place_result })
+    end
+    if proto.place_as_equipment_result then
+        table.insert(label, { "equipment-name." .. proto.place_as_equipment_result })
+    end
+    table.insert(label, proto.name)
+    return label
+end
+
 local function get_translated_key(minable, raw_name)
     if minable.results and #minable.results > 0 then
         local first = data.raw.item[minable.results[1].name]
@@ -129,6 +162,55 @@ local function get_translated_key(minable, raw_name)
         end
     end
     return raw_name
+end
+
+-- Stable names 
+-- Factorio doesn't tell us which mod defined a prototype, but nearly every prototype
+-- has an icon, and icon paths start with "__<mod-name>__/". That is the origin tag.
+-- Heuristic: a mod that reuses another mod's icon files gets that other mod's tag.
+-- The tag only has to be STABLE, it doesn't have to be "correct".
+
+local ORIGIN_LOOKUP_TYPES = {
+    "item", "fluid", "tool", "ammo", "capsule", "gun", "module", "armor",
+    "repair-tool", "rail-planner", "item-with-entity-data",
+}
+
+local function mod_from_path(path)
+    if type(path) ~= "string" then return nil end
+    local mod = path:match("^__(.-)__/")
+    if mod == "core" then return nil end -- shared engine icons say nothing about the origin
+    return mod
+end
+
+local function proto_origin(proto)
+    if not proto then return nil end
+    local path = proto.icon
+    if not path and proto.icons and proto.icons[1] then path = proto.icons[1].icon end
+    return mod_from_path(path)
+end
+
+local function find_proto(name)
+    for _, t in ipairs(ORIGIN_LOOKUP_TYPES) do
+        local p = data.raw[t] and data.raw[t][name]
+        if p then return p end
+    end
+    return nil
+end
+
+-- item_proto may be nil (it is looked up by name), resource_proto is the fallback.
+local function origin_tag(item_name, item_proto, resource_proto)
+    local tag = proto_origin(item_proto or find_proto(item_name))
+        or proto_origin(resource_proto)
+        or "misc"
+    return (tag:gsub("[^%w%-_]", "-"))
+end
+
+-- Sorted key list: `pairs` order is not guaranteed, and it decides who wins a name clash.
+local function sorted_keys(t)
+    local keys = {}
+    for k in pairs(t) do table.insert(keys, k) end
+    table.sort(keys)
+    return keys
 end
 
 -- Minable results 
@@ -168,10 +250,10 @@ local function claim_unique_outputs(results)
     return true
 end
 
--- Ingredient entry pointing at the "<counter><name>-log" item if it exists,
+-- Ingredient entry pointing at the "<prefix><name>-log" item if it exists,
 -- otherwise at the plain item.
 local function log_ingredient(base_name, amount)
-    local log_name = counter .. base_name .. "-log"
+    local log_name = current_prefix .. base_name .. "-log"
     return {
         type = "item",
         name = data.raw.item[log_name] and log_name or base_name,
@@ -273,14 +355,53 @@ end
 -- 4. SEED SET BUILDER
 --    cfg fields:
 --      resource_name, raw_name, minable, results, has_fluid
+--      origin         origin-mod tag for the names ("base", "space-age", ...)
 --      tint, localised, recipe_icon
 --      overlay        optional extra icon layer drawn on top of the tree seed
---      tech_name      technology name, or nil to skip the technology
+--      has_tech       true to also create the technology (named <prefix><raw_name>)
 --      recipes_enabled, allow_quality   flags for the processing recipes
 --      infuser_item   { name, amount } that goes in the infuser's item slot
 
+-- Item ids that get a "<prefix><id>-log" item: one per minable result.
+local function collect_log_ids(minable, resource_name, localised)
+    local ids = {}
+    if minable.results and #minable.results > 0 then
+        for _, r in ipairs(minable.results) do
+            table.insert(ids, { id = r.name, label = item_label(r.name) })
+        end
+    else
+        table.insert(ids, { id = resource_name, label = localised })
+    end
+    return ids
+end
+
+local function prefix_is_free(prefix, cfg, log_ids)
+    -- never step on the essence/crystal names this mod already owns
+    if prefix:sub(1, #ESSENCE_PREFIX) == ESSENCE_PREFIX then return false end
+    if data.raw.item[prefix .. cfg.raw_name .. "-tree-seed"] then return false end
+    if data.raw.plant and data.raw.plant[prefix .. cfg.resource_name .. "-tree"] then return false end
+    for _, entry in ipairs(log_ids) do
+        if data.raw.item[prefix .. entry.id .. "-log"] then return false end
+    end
+    return true
+end
+
+-- Normal case: "mystical-<origin>-". Only when another set already took those names
+-- (e.g. resource {a,b} vs resource {a,c}) the resource name is added to keep them apart.
+local function pick_prefix(cfg, log_ids)
+    local origin = cfg.origin or "misc"
+    local candidates = {
+        NAME_ROOT .. origin .. "-",
+        NAME_ROOT .. origin .. "-" .. cfg.resource_name .. "-",
+    }
+    for _, prefix in ipairs(candidates) do
+        if prefix_is_free(prefix, cfg, log_ids) then return prefix end
+    end
+    error("Mystical Forestry: cannot find a unique name for item '" .. tostring(cfg.raw_name)
+        .. "' / resource '" .. tostring(cfg.resource_name) .. "' (origin '" .. origin .. "')")
+end
+
 local function build_seed_set(cfg)
-    local id            = counter
     local resource_name = cfg.resource_name
     local raw_name      = cfg.raw_name
     local minable       = cfg.minable
@@ -290,9 +411,15 @@ local function build_seed_set(cfg)
     local localised     = cfg.localised
     local overlay       = cfg.overlay
 
+    local log_ids = collect_log_ids(minable, resource_name, localised)
+    local id = pick_prefix(cfg, log_ids)
+    current_prefix = id
+
     local seed_name  = id .. raw_name .. "-tree-seed"
     local plant_name = id .. resource_name .. "-tree"
     local icon_name  = resource_name:gsub("-ore$", "")
+
+    log(string.format("[MysticalForestry] seed set #%d: %s", counter, seed_name))
 
     -- seed item
     local seed_item = {
@@ -317,43 +444,36 @@ local function build_seed_set(cfg)
         item = seed_name,
         subgroup = "mystical-agriculture-seed-recycling",
         icons = recycling_icons("template-tree-seed.png", tint, overlay),
-        order = "a[seed-recycling]-" .. id,
+        order = "a[seed-recycling]-" .. raw_name,
         localised_name = { "recipe-name.seed-recycling", localised },
     })
 
     -- log items
     local unlocks = {}
-    local log_ids = {}
-    if minable.results and #minable.results > 0 then
-        for _, r in ipairs(minable.results) do
-            table.insert(log_ids, { id = r.name, label = item_label(r.name) })
-        end
-    else
-        table.insert(log_ids, { id = resource_name, label = localised })
-    end
 
-    for _, log in ipairs(log_ids) do
+    for _, log_entry in ipairs(log_ids) do
         data:extend({
             {
                 type = "item",
-                name = id .. log.id .. "-log",
+                name = id .. log_entry.id .. "-log",
                 icons = { tinted_layer("template-wood.png", tint) },
                 subgroup = "mystical-agriculture-woods",
-                order = "b[log]-" .. log.id,
+                order = "b[log]-" .. log_entry.id,
                 stack_size = 100,
                 weight = 2000,
-                localised_name = { "item-name.mystical-wood", log.label },
+                localised_name = { "item-name.mystical-wood", log_entry.label },
             }
         })
         add_recycling_recipe({
-            name = id .. log.id .. "-log-recycling",
-            item = id .. log.id .. "-log",
+            name = id .. log_entry.id .. "-log-recycling",
+            item = id .. log_entry.id .. "-log",
             subgroup = "mystical-agriculture-log-recycling",
             icons = recycling_icons("template-wood.png", tint),
-            order = "a[log-recycling]-" .. id,
+            order = "a[log-recycling]-" .. log_entry.id,
+            enabled = cfg.recipes_enabled,
             localised_name = { "recipe-name.log-recycling", localised },
         })
-        table.insert(unlocks, { type = "unlock-recipe", recipe = id .. log.id .. "-log-recycling" })
+        table.insert(unlocks, { type = "unlock-recipe", recipe = id .. log_entry.id .. "-log-recycling" })
     end
 
     -- plant
@@ -412,7 +532,8 @@ local function build_seed_set(cfg)
             ingredients = get_mine_results_as_log(minable, 2, resource_name),
             results = recipe_results,
             icon = cfg.recipe_icon,
-            order = "a[from-log]-" .. id,
+            icon_size = cfg.recipe_icon_size, -- nil for resource seeds (unchanged)
+            order = "a[from-log]-" .. raw_name,
             enabled = cfg.recipes_enabled,
             allow_productivity = not has_fluid,
             localised_name = { "recipe-name.from-log", localised },
@@ -426,7 +547,7 @@ local function build_seed_set(cfg)
             energy_required = 1,
             ingredients = get_mine_results_as_log(minable, 1, resource_name),
             results = { { type = "item", name = seed_name, amount = 1 } },
-            order = "c[tree-seed-from-log]-" .. id,
+            order = "c[tree-seed-from-log]-" .. raw_name,
             icons = with_overlay({ tinted_layer("template-wood-processing.png", tint) }, overlay),
             allow_quality = cfg.allow_quality,
             enabled = cfg.recipes_enabled,
@@ -448,16 +569,18 @@ local function build_seed_set(cfg)
         })
 
     -- technology
-    if cfg.tech_name then
+    if cfg.has_tech then
+        local tech_name = safe_tech_name(id .. raw_name)
+
         table.insert(unlocks, { type = "unlock-recipe", recipe = id .. raw_name .. "-tree-seed-from-log" })
         table.insert(unlocks, { type = "unlock-recipe", recipe = id .. raw_name .. "-from-log" })
         table.insert(unlocks, { type = "unlock-recipe", recipe = id .. raw_name .. "-seed-recycling" })
 
         local tech = {
             type = "technology",
-            name = cfg.tech_name,
+            name = tech_name,
             icons = with_overlay({ tinted_layer("template-tree-seed.png", tint) }, overlay),
-            hidden = false,
+            hidden = settings.startup["mystical-agriculture-hide-tech"].value,
             effects = unlocks,
             prerequisites = { "mystical-trigger-mystical-agriculture-uncommon-essence-tree-seed" },
             localised_name = { "technology-name.mystical-resource-tech", localised },
@@ -856,9 +979,11 @@ end
 -- 5e. Resource + custom-item seed sets 
 
 -- Every minable resource gets a seed set (unless another resource already
--- produces the same outputs).
+-- produces the same outputs). Resources are visited in name order so that the
+-- result never depends on `pairs` ordering.
 function func.initialize_prototypes()
-    for resource_name, resource_proto in pairs(data.raw.resource) do
+    for _, resource_name in ipairs(sorted_keys(data.raw.resource)) do
+        local resource_proto = data.raw.resource[resource_name]
         local minable = resource_proto.minable
 
         if minable then
@@ -876,11 +1001,12 @@ function func.initialize_prototypes()
                     minable         = minable,
                     results         = results,
                     has_fluid       = has_fluid_result(results),
+                    origin          = origin_tag(raw_name, nil, resource_proto),
                     tint            = get_resource_tint(resource_name, resource_proto),
                     localised       = get_translated_key(minable, resource_name),
                     recipe_icon     = get_recipe_icon(minable, has_fluid_result(results)),
                     overlay         = nil,
-                    tech_name       = counter .. "mystical-" .. raw_name,
+                    has_tech        = true,
                     recipes_enabled = false,
                     allow_quality   = false,
                     infuser_item    = { name = "mystical-agriculture-normal-essence-tree-seed", amount = 1 },
@@ -891,7 +1017,8 @@ function func.initialize_prototypes()
 end
 
 local function find_resource_for_item(item_name)
-    for res_name, res_proto in pairs(data.raw.resource) do
+    for _, res_name in ipairs(sorted_keys(data.raw.resource)) do
+        local res_proto = data.raw.resource[res_name]
         local minable = res_proto.minable
         if minable then
             if minable.result == item_name then
@@ -912,7 +1039,7 @@ end
 function func.create_custom_prototypes(item_proto, has_tech, use_custom_icon, enabled_by_default, custom_icon)
     item_proto = item_proto or {}
     if not item_proto.name then
-        item_proto.name = counter .. "unknown-item"
+        item_proto.name = counter .. "unknown-item" -- logging only; such an item has no stable name anyway
     end
 
     local item_name = item_proto.name
@@ -943,16 +1070,20 @@ function func.create_custom_prototypes(item_proto, has_tech, use_custom_icon, en
     end
 
     local recipe_icon = get_recipe_icon(minable, has_fluid)
+    local recipe_icon_size = 64
     if item_proto.icon then
         recipe_icon = item_proto.icon
+        recipe_icon_size = item_proto.icon_size or 64
     elseif item_proto.icons and #item_proto.icons > 0 then
-        recipe_icon = item_proto.icons[1].icon
+        local first = item_proto.icons[1]
+        recipe_icon = first.icon
+        recipe_icon_size = first.icon_size or item_proto.icon_size or 64
     end
 
     -- Small icon drawn in the corner of every icon of this set
     local overlay = custom_icon
     if not overlay and use_custom_icon then
-        overlay = { icon = recipe_icon, icon_size = 64, scale = 0.35, shift = { 8, -8 } }
+        overlay = { icon = recipe_icon, icon_size = recipe_icon_size, scale = 22.4 / recipe_icon_size, shift = { 8, -8 } }
     end
 
     build_seed_set({
@@ -961,14 +1092,16 @@ function func.create_custom_prototypes(item_proto, has_tech, use_custom_icon, en
         minable         = minable,
         results         = results,
         has_fluid       = has_fluid,
+        origin          = origin_tag(item_name, item_proto, resource_proto),
         tint            = tint,
-        localised       = item_proto.localised_name or get_translated_key(minable, item_name),
+        localised       = proto_label(item_proto),
         recipe_icon     = recipe_icon,
+        recipe_icon_size = recipe_icon_size,
         overlay         = overlay,
-        tech_name       = has_tech and ("mystical-" .. item_name) or nil,
+        has_tech        = has_tech and true or false,
         recipes_enabled = enabled_by_default or false,
         allow_quality   = nil,
-        infuser_item    = { name = "wood", amount = 1 },
+        infuser_item    = { name = "mystical-agriculture-normal-essence-tree-seed", amount = 1 },
     })
 end
 
@@ -1082,6 +1215,7 @@ function func.create_quality_seed_recipe()
                             type = "technology",
                             name = "mystical-trigger-" .. seed_name,
                             icons = intermediate.icons,
+                            hidden= settings.startup["mystical-agriculture-hide-tech"].value,
                             effects = {
                                 { type = "unlock-recipe", recipe = "mystical-agriculture-" .. seed_name .. "-crafting" },
                                 { type = "unlock-recipe", recipe = ESSENCE_PREFIX .. q.name .. "-essence-seed-recycling" },

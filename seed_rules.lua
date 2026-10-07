@@ -16,14 +16,14 @@ local function exact(name, amount)
 end
 
 -- Fluids can't go in the infuser: use the filled barrel from the base game's
--- "fill-<fluid>-barrel" recipe instead. Resolved at runtime so it works no
+-- "<fluid>-barrel" recipe instead. Resolved at runtime so it works no
 -- matter when the barrel recipes were generated in the data stage.
 local function resolve_ingredient(ing)
     if ing.type ~= "fluid" then
         return ing.name, ing.amount
     end
 
-    local recipe = prototypes.recipe["fill-" .. ing.name .. "-barrel"]
+    local recipe = prototypes.recipe[ing.name .. "-barrel"]
     if not recipe then
         return nil, "fluid '" .. ing.name .. "' has no barrel recipe"
     end

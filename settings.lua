@@ -4,7 +4,7 @@ data:extend({
     name = "mystical-agriculture-all-items",
     setting_type = "startup",
     default_value = false,
-    hidden=true,
+    hidden=false,
     order = "zzz",
     localised_name = { "setting-name.mystical-agriculture-all-items" },
   }
@@ -59,7 +59,7 @@ data:extend({
     type = "int-setting",
     name = "mystical-agriculture-crafting-amount",
     setting_type = "startup",
-    default_value = 1,
+    default_value = 15,
     maximum_value = 65535,
     minimum_value = 1,
     order = "c",
